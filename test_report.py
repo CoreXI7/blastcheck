@@ -9,13 +9,13 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCANNER = os.path.join(HERE, "leasecheck.py")
+SCANNER = os.path.join(HERE, "blastcheck.py")
 HOSTILE = '<script>alert(1)</script>"\'><img src=x onerror=alert(2)>'
 
 
 class ReportTests(unittest.TestCase):
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="leasecheck-report-")
+        self.home = tempfile.mkdtemp(prefix="blastcheck-report-")
         self.addCleanup(shutil.rmtree, self.home, True)
         folder = os.path.join(self.home, "proj")
         os.makedirs(folder)

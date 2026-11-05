@@ -1,8 +1,8 @@
-# leasecheck: spec
+# blastcheck: spec
 
 Shows what an AI coding agent running as the current user could reach on this computer, and how to reduce it.
 
-Single file `leasecheck.py`, Python 3.10+ stdlib only, Linux first (macOS where easy). Run: `python3 leasecheck.py [--json] [--home DIR]`.
+Single file `blastcheck.py`, Python 3.10+ stdlib only, Linux first (macOS where easy). Run: `python3 blastcheck.py [--json] [--home DIR]`.
 
 ## Hard rules
 - Read-only: never changes, creates or deletes anything outside what the user redirects.
@@ -26,5 +26,5 @@ Single file `leasecheck.py`, Python 3.10+ stdlib only, Linux first (macOS where 
 Plain text sorted by severity, with color only on a terminal; a one-line summary first, e.g. "1 critical, 3 high, 2 medium". `--json` gives the same data. Exit code 0 always unless the tool itself crashes. A final line states: "This shows common risks it knows to look for. It doesn't prove you're safe. Nothing left this computer."
 
 ## Also write
-- `test_leasecheck.py`: stdlib unittest using a fake home in a temp dir with planted fake secrets. Must prove that planted secret values never appear in text or JSON output, that symlinks aren't followed, that nothing in the fake home changes (compare file list and mtimes before and after), and that each check fires. No real home access, and mock id and sudo.
+- `test_blastcheck.py`: stdlib unittest using a fake home in a temp dir with planted fake secrets. Must prove that planted secret values never appear in text or JSON output, that symlinks aren't followed, that nothing in the fake home changes (compare file list and mtimes before and after), and that each check fires. No real home access, and mock id and sudo.
 - `README.md`: short: what it does, one-line run command, sample output with made-up data, what it never does, limits. No personal names, domains or addresses. No emoji headings.

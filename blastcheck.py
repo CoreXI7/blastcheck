@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""leasecheck - show what an AI coding agent running as you could reach.
+"""blastcheck - show what an AI coding agent running as you could reach.
 
 Read-only: this never changes, creates or deletes anything.
 No network: no socket/urllib/http imports and no network subprocesses.
 Single file, Python 3.10+, standard library only.
 
-Usage: python3 leasecheck.py [--json | --sarif | --html] [--all] [--home DIR]
+Usage: python3 blastcheck.py [--json | --sarif | --html] [--all] [--home DIR]
                              [--show-hosts] [--fail-on critical|high|medium]
                              [--version]
 """
@@ -1785,7 +1785,7 @@ def render_text(data, color, show_all=False):
     counts = data["summary"]
     lines = []
 
-    lines.append(bold("leasecheck " + VERSION, color) + "  " + dim(TAGLINE, color))
+    lines.append(bold("blastcheck " + VERSION, color) + "  " + dim(TAGLINE, color))
     lines.append(marks["rule"] * width)
     lines.append("")
 
@@ -2205,7 +2205,7 @@ def render_html(data):
     )
     parts.append('<meta name="color-scheme" content="light dark">')
     parts.append(
-        "<title>leasecheck {} - security report</title>".format(
+        "<title>blastcheck {} - security report</title>".format(
             html.escape(VERSION, quote=True)
         )
     )
@@ -2216,7 +2216,7 @@ def render_html(data):
 
     parts.append('<header class="page-header">')
     parts.append(
-        '<h1>leasecheck <span class="version">{}</span></h1>'.format(
+        '<h1>blastcheck <span class="version">{}</span></h1>'.format(
             html.escape(VERSION, quote=True)
         )
     )
@@ -2493,10 +2493,10 @@ def render_sarif(data, home):
             {
                 "tool": {
                     "driver": {
-                        "name": "leasecheck",
+                        "name": "blastcheck",
                         "version": VERSION,
                         "informationUri": (
-                            "https://github.com/CoreXI7/leasecheck"
+                            "https://github.com/CoreXI7/blastcheck"
                         ),
                         "rules": rules,
                     }
@@ -2510,7 +2510,7 @@ def render_sarif(data, home):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="leasecheck",
+        prog="blastcheck",
         description=(
             "Show what an AI coding agent running as the current user could "
             "reach. Read-only; nothing leaves this computer."
@@ -2519,7 +2519,7 @@ def main(argv=None):
     parser.add_argument(
         "--version",
         action="version",
-        version="leasecheck " + VERSION,
+        version="blastcheck " + VERSION,
         help="print the version and exit",
     )
     output = parser.add_mutually_exclusive_group()
@@ -2557,7 +2557,7 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     if os.name != "posix":
-        sys.stderr.write("leasecheck runs on Linux and macOS only.\n")
+        sys.stderr.write("blastcheck runs on Linux and macOS only.\n")
         return 2
 
     try:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finding-level tests for leasecheck on a temporary fake home.
+"""Finding-level tests for blastcheck on a temporary fake home.
 
 Run with: python3 -m unittest test_findings.py
 """
@@ -14,7 +14,7 @@ import unittest
 import uuid
 from unittest import mock
 
-import leasecheck
+import blastcheck
 
 
 POSIX = os.name == "posix"
@@ -66,13 +66,13 @@ class ScannerTestCase(unittest.TestCase):
     """Base case: a throwaway home and mocked id/sudo subprocess calls."""
 
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="leasecheck-findings-")
+        self.home = tempfile.mkdtemp(prefix="blastcheck-findings-")
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         self.groups = []
         self.id_ok = True
         self.sudo_result = fake_result(1, "", "sudo: a password is required\n")
         patcher = mock.patch.object(
-            leasecheck, "run_fixed", side_effect=self._fake_run_fixed
+            blastcheck, "run_fixed", side_effect=self._fake_run_fixed
         )
         self.run_fixed_mock = patcher.start()
         self.addCleanup(patcher.stop)
@@ -98,7 +98,7 @@ class ScannerTestCase(unittest.TestCase):
         return os.path.join(self.home, *parts)
 
     def scan(self, show_hosts=False):
-        return leasecheck.Scanner(self.home, show_hosts).run()
+        return blastcheck.Scanner(self.home, show_hosts).run()
 
     def findings(self, data, title=None, severity=None):
         matches = []
@@ -221,7 +221,7 @@ class SavedLoginTests(ScannerTestCase):
     directory_stores = {".config/gcloud", ".azure"}
 
     def test_each_saved_login_store_is_reported(self):
-        for rel, label in leasecheck.SAVED_LOGINS:
+        for rel, label in blastcheck.SAVED_LOGINS:
             with self.subTest(store=rel):
                 self.reset_home()
                 target = self.path(*rel.split("/"))

@@ -1,4 +1,4 @@
-"""Tests for the environment, MCP and --fail-on additions to leasecheck.
+"""Tests for the environment, MCP and --fail-on additions to blastcheck.
 
 Standard library only. Every scanner run is a subprocess with --home pointing
 at a temporary home and a controlled environment, so no real home is read.
@@ -13,7 +13,7 @@ import unittest
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCANNER = os.path.join(HERE, "leasecheck.py")
+SCANNER = os.path.join(HERE, "blastcheck.py")
 
 RANK = {"critical": 0, "high": 1, "medium": 2, "info": 3}
 
@@ -60,7 +60,7 @@ def expected_exit(data, level):
 class EnvironmentCheckTest(unittest.TestCase):
     def test_literal_credential_is_reported_without_its_value(self):
         with tempfile.TemporaryDirectory() as home:
-            name = "LEASE_TOKEN_" + letters(8)
+            name = "BLAST_TOKEN_" + letters(8)
             value = unique_value("tok_")
             result = scan(home, {name: value}, "--json")
             self.assertEqual(result.returncode, 0)
@@ -76,8 +76,8 @@ class EnvironmentCheckTest(unittest.TestCase):
 
     def test_reference_and_placeholder_values_are_ignored(self):
         with tempfile.TemporaryDirectory() as home:
-            reference_name = "LEASE_TOKEN_" + letters(8)
-            placeholder_name = "LEASE_SECRET_" + letters(8)
+            reference_name = "BLAST_TOKEN_" + letters(8)
+            placeholder_name = "BLAST_SECRET_" + letters(8)
             result = scan(
                 home,
                 {reference_name: "${SOME_OTHER_TOKEN}", placeholder_name: "changeme"},
@@ -91,7 +91,7 @@ class EnvironmentCheckTest(unittest.TestCase):
 
     def test_fail_on_levels(self):
         with tempfile.TemporaryDirectory() as home:
-            name = "LEASE_TOKEN_" + letters(8)
+            name = "BLAST_TOKEN_" + letters(8)
             value = unique_value("tok_")
             env = {name: value}
 

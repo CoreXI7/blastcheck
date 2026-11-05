@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Round 4 command-line tests for leasecheck.py.
+"""Round 4 command-line tests for blastcheck.py.
 
 Everything is exercised through the real CLI with --home pointed at a
 throw-away temporary directory.  Only the standard library and
@@ -14,13 +14,13 @@ import sys
 import tempfile
 import unittest
 
-import leasecheck
+import blastcheck
 import uuid
 from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "leasecheck.py"
+SCRIPT = HERE / "blastcheck.py"
 
 CLAUDE_TITLE = "Claude Code may run commands without asking"
 AIDER_TITLE = "Aider approves every action"
@@ -43,7 +43,7 @@ def dangerous_entries():
     ]
 
 
-class LeasecheckCLITest(unittest.TestCase):
+class BlastcheckCLITest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="lc-r4-")
         self.addCleanup(self._tmp.cleanup)
@@ -82,15 +82,15 @@ class LeasecheckCLITest(unittest.TestCase):
         return path
 
 
-class TestVersion(LeasecheckCLITest):
+class TestVersion(BlastcheckCLITest):
     def test_version_prints_name_and_number(self):
         proc = self.run_cli("--version")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
-        self.assertEqual(lines, ["leasecheck 0.2.0"])
+        self.assertEqual(lines, ["blastcheck 0.2.0"])
 
 
-class TestClaudeAllowRules(LeasecheckCLITest):
+class TestClaudeAllowRules(BlastcheckCLITest):
     def test_each_dangerous_entry_gets_a_high_finding(self):
         for entry in dangerous_entries():
             with self.subTest(entry=entry):
@@ -99,7 +99,7 @@ class TestClaudeAllowRules(LeasecheckCLITest):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn(CLAUDE_TITLE, proc.stdout)
                 self.assertIn("settings.json", proc.stdout)
-                self.assertIn(leasecheck.rule_label(entry), proc.stdout)
+                self.assertIn(blastcheck.rule_label(entry), proc.stdout)
                 self.assertRegex(proc.stdout, r"(?i)\bhigh\b")
 
     def test_one_finding_per_file(self):
@@ -141,7 +141,7 @@ class TestClaudeAllowRules(LeasecheckCLITest):
         self.assertNotIn(CLAUDE_TITLE, proc.stdout)
 
 
-class TestAider(LeasecheckCLITest):
+class TestAider(BlastcheckCLITest):
     def test_yes_always_true_is_flagged(self):
         self.write_aider("# fake config\nyes-always: true\n")
         proc = self.run_cli()
@@ -162,7 +162,7 @@ class TestAider(LeasecheckCLITest):
         self.assertNotIn(AIDER_TITLE, proc.stdout)
 
 
-class TestSarif(LeasecheckCLITest):
+class TestSarif(BlastcheckCLITest):
     def plant_mixed_findings(self):
         self.write_claude(
             [
@@ -185,10 +185,10 @@ class TestSarif(LeasecheckCLITest):
         self.assertEqual(len(doc["runs"]), 1)
         run = doc["runs"][0]
         driver = run["tool"]["driver"]
-        self.assertEqual(driver["name"], "leasecheck")
+        self.assertEqual(driver["name"], "blastcheck")
         self.assertEqual(driver["version"], "0.2.0")
         self.assertEqual(
-            driver["informationUri"], "https://github.com/CoreXI7/leasecheck"
+            driver["informationUri"], "https://github.com/CoreXI7/blastcheck"
         )
 
         rules = driver["rules"]
@@ -267,7 +267,7 @@ class TestSarif(LeasecheckCLITest):
         self.assertNotIn("This shows common risks", proc.stdout)
 
 
-class TestArgumentErrors(LeasecheckCLITest):
+class TestArgumentErrors(BlastcheckCLITest):
     def test_sarif_with_json_is_an_argparse_error(self):
         proc = self.run_cli("--sarif", "--json")
         self.assertEqual(proc.returncode, 2)
@@ -282,13 +282,13 @@ class TestArgumentErrors(LeasecheckCLITest):
 
 class RuleLabelTests(unittest.TestCase):
     def test_rule_details_are_not_printed(self):
-        import leasecheck
+        import blastcheck
         value = "v" + uuid.uuid4().hex
         rule = "Bash(curl -H 'Authorization: Bearer " + value + "' https://x)"
-        label = leasecheck.rule_label(rule)
+        label = blastcheck.rule_label(rule)
         self.assertEqual(label, "Bash(curl ...)")
         self.assertNotIn(value, label)
-        self.assertEqual(leasecheck.rule_label("Bash(*)"), "Bash(*)")
+        self.assertEqual(blastcheck.rule_label("Bash(*)"), "Bash(*)")
 
 if __name__ == "__main__":
     unittest.main()

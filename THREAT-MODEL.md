@@ -1,6 +1,6 @@
 # Threat model
 
-leasecheck answers one question: what could a program running as me reach with my permissions? This is what it assumes, and where its answers stop.
+blastcheck answers one question: what could a program running as me reach with my permissions? This is what it assumes, and where its answers stop.
 
 ## What it protects against
 

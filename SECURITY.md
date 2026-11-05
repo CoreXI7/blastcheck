@@ -4,14 +4,14 @@
 
 Report privately through GitHub security advisories: open the repository's Security tab and choose "Report a vulnerability". Please do not open a public issue for a security problem.
 
-Include the leasecheck version or commit, your operating system and Python version, the command you ran, and the smallest reproduction you can. Redact real credentials; never paste a working secret into a report.
+Include the blastcheck version or commit, your operating system and Python version, the command you ran, and the smallest reproduction you can. Redact real credentials; never paste a working secret into a report.
 
 ## What counts as a vulnerability
 
-leasecheck is read-only and makes no network connections. Within that, these count:
+blastcheck is read-only and makes no network connections. Within that, these count:
 
 - Any credential value reaching the output. stdout, stderr and `--json` must never contain a secret, token, password, passphrase or private key material, whether it arrives through a file name, a variable name, an MCP config field, a URL, or an error message. Names and paths are expected; values are not.
-- A way to make leasecheck change, create, move or delete anything, or contact the network.
+- A way to make blastcheck change, create, move or delete anything, or contact the network.
 - A symlink or path trick that makes it read a file it says it never opens, such as a saved login store, or read a file's contents outside the home directory beyond the fixed system paths it checks.
 - A crash, hang or unbounded memory use caused by a hostile file or config, for example a deeply nested JSON document.
 - Output that a hostile file name can make unsafe: control characters that pass through `clean()` and reach the terminal.

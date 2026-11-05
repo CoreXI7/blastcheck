@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for leasecheck's sudo, SSH agent, MCP and startup-file checks."""
+"""Tests for blastcheck's sudo, SSH agent, MCP and startup-file checks."""
 
 import json
 import os
@@ -13,7 +13,7 @@ import uuid
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import leasecheck
+import blastcheck
 
 AF_UNIX = getattr(socket, "AF_UNIX", None)
 
@@ -25,7 +25,7 @@ class TestSecurityB(unittest.TestCase):
         self.home = self.tmp.name
 
     def scanner(self):
-        return leasecheck.Scanner(self.home, False)
+        return blastcheck.Scanner(self.home, False)
 
     def test_passwordless_sudo_critical_and_high(self):
         cases = (
@@ -43,7 +43,7 @@ class TestSecurityB(unittest.TestCase):
                         return subprocess.CompletedProcess(argv, 0, "users\n", "")
                     return subprocess.CompletedProcess(argv, 0, output + "\n", "")
 
-                with mock.patch.object(leasecheck, "run_fixed", side_effect=fake_run):
+                with mock.patch.object(blastcheck, "run_fixed", side_effect=fake_run):
                     scanner.check_root_paths()
                 titles = {item["title"]: item["severity"] for item in scanner.findings}
                 if severity == "critical":

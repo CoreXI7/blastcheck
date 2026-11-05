@@ -1,25 +1,25 @@
-# leasecheck
+# blastcheck
 
 Shows what an AI coding agent running as the current user could reach on this computer, and how to reduce it.
 
 It checks your home directory, a few well-known locations and your shell environment, reports common ways an agent could gain more access than you intended, and gives a one-line fix for each finding. It is read-only.
 
-See a [sample report](https://corexi7.github.io/leasecheck/) made from made-up data.
+See a [sample report](https://corexi7.github.io/blastcheck/) made from made-up data.
 
 ## Quick start
 
 ```sh
-python3 leasecheck.py
+python3 blastcheck.py
 ```
 
 Options:
 
 ```sh
-python3 leasecheck.py --json          # same data as JSON
-python3 leasecheck.py --all           # every finding separately, not grouped
-python3 leasecheck.py --home DIR      # check another home directory
-python3 leasecheck.py --show-hosts    # also print HostName addresses from the SSH config
-python3 leasecheck.py --fail-on high  # exit 1 if any high or critical finding is reported
+python3 blastcheck.py --json          # same data as JSON
+python3 blastcheck.py --all           # every finding separately, not grouped
+python3 blastcheck.py --home DIR      # check another home directory
+python3 blastcheck.py --show-hosts    # also print HostName addresses from the SSH config
+python3 blastcheck.py --fail-on high  # exit 1 if any high or critical finding is reported
 ```
 
 Python 3.10 or newer, standard library only, one file. Tested on Linux. macOS has not been tested.
@@ -115,7 +115,7 @@ This shows common risks it knows to look for. It doesn't prove you're safe. Noth
 ## Limits
 
 - Scans only the home directory (or `--home DIR`) and the fixed paths listed above; other locations are not covered.
-- The environment check sees the variables of the process that runs leasecheck, and the MCP check reads only the listed config files.
+- The environment check sees the variables of the process that runs blastcheck, and the MCP check reads only the listed config files.
 - Stops cleanly at 20,000 files or 20 seconds and says so in the report, so results can be incomplete.
 - Skips files over 1 MB, symlinks, and directories such as `node_modules`, `.git`, caches and virtualenvs.
 - Permission errors are skipped and counted, never fatal.

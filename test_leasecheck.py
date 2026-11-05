@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for leasecheck: subprocess scans of a fake home plus unit tables."""
+"""Tests for blastcheck: subprocess scans of a fake home plus unit tables."""
 
 import importlib.util
 import json
@@ -15,11 +15,11 @@ from unittest import mock
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCANNER = os.path.join(HERE, "leasecheck.py")
+SCANNER = os.path.join(HERE, "blastcheck.py")
 
 
-def load_leasecheck():
-    spec = importlib.util.spec_from_file_location("leasecheck", SCANNER)
+def load_blastcheck():
+    spec = importlib.util.spec_from_file_location("blastcheck", SCANNER)
     if spec is None or spec.loader is None:
         raise ImportError("cannot load " + SCANNER)
     module = importlib.util.module_from_spec(spec)
@@ -27,7 +27,7 @@ def load_leasecheck():
     return module
 
 
-leasecheck = load_leasecheck()
+blastcheck = load_blastcheck()
 
 
 def snapshot_tree(root):
@@ -62,9 +62,9 @@ def make_value(prefix):
 
 class ScannerSubprocessTests(unittest.TestCase):
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="leasecheck-home-")
+        self.home = tempfile.mkdtemp(prefix="blastcheck-home-")
         self.addCleanup(shutil.rmtree, self.home, True)
-        self.outside = tempfile.mkdtemp(prefix="leasecheck-outside-")
+        self.outside = tempfile.mkdtemp(prefix="blastcheck-outside-")
         self.addCleanup(shutil.rmtree, self.outside, True)
 
     def write_text(self, root, relpath, content, mode=None):
@@ -220,13 +220,13 @@ class SudoNopassCommandsTests(unittest.TestCase):
         for label, text, expected in self.CASES:
             with self.subTest(label=label):
                 self.assertEqual(
-                    leasecheck.sudo_nopass_commands(text + "\n"), expected
+                    blastcheck.sudo_nopass_commands(text + "\n"), expected
                 )
 
 
 class ReviewRegressionTests(unittest.TestCase):
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="leasecheck-home-")
+        self.home = tempfile.mkdtemp(prefix="blastcheck-home-")
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def put(self, relpath, content, mode=0o600):
@@ -305,7 +305,7 @@ class ReviewRegressionTests(unittest.TestCase):
                 self.assertNotIn(line, stdout)
 
     def test_reads_refuse_links_and_fifos(self):
-        scanner = leasecheck.Scanner(self.home, False)
+        scanner = blastcheck.Scanner(self.home, False)
         target = self.put("real.env", "A=1\n")
         link = os.path.join(self.home, "link.env")
         fifo = os.path.join(self.home, "pipe.env")
@@ -344,7 +344,7 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(self.titles(self.scan_json()[1]).count(title), 12)
 
     def test_claude_settings_are_parsed(self):
-        f = leasecheck.claude_risky_settings
+        f = blastcheck.claude_risky_settings
         self.assertEqual(f('{"permissions": {"defaultMode": "bypassPermissions"}}'),
                          ["defaultMode: bypassPermissions"])
         self.assertEqual(f('{"dangerouslySkipPermissions": true}'), ["dangerouslySkipPermissions"])
@@ -353,11 +353,11 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(f("not json"), [])
 
     def sudo_findings(self, listing):
-        scanner = leasecheck.Scanner(self.home, False)
+        scanner = blastcheck.Scanner(self.home, False)
         def fake(argv):
             out = listing if argv[0] == "sudo" else ""
             return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
-        with mock.patch.object(leasecheck, "run_fixed", fake):
+        with mock.patch.object(blastcheck, "run_fixed", fake):
             scanner.check_root_paths()
         return [f for f in scanner.findings if "sudo" in f["title"].lower()]
 

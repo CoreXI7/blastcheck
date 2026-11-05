@@ -6,9 +6,12 @@ It checks your home directory, a few well-known locations and your shell environ
 
 See a [sample report](https://corexi7.github.io/blastcheck/) made from made-up data.
 
-## Quick start
+## Install
 
 ```sh
+curl -fsSLO https://github.com/CoreXI7/blastcheck/releases/latest/download/blastcheck.py
+curl -fsSLO https://github.com/CoreXI7/blastcheck/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS              # shasum -a 256 -c SHA256SUMS on macOS
 python3 blastcheck.py
 ```
 
@@ -23,6 +26,27 @@ python3 blastcheck.py --fail-on high  # exit 1 if any high or critical finding i
 ```
 
 Python 3.10 or newer, standard library only, one file. Tested on Linux. macOS has not been tested.
+
+## GitHub code scanning
+
+```yaml
+name: blastcheck
+on: [push, pull_request]
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsSLO https://github.com/CoreXI7/blastcheck/releases/latest/download/blastcheck.py
+      - run: python3 blastcheck.py --sarif > blastcheck.sarif
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: blastcheck.sarif
+```
+
+The job scans the runner itself, so this is an example of the SARIF format; teams usually run blastcheck on real machines instead.
 
 ## Exit codes
 

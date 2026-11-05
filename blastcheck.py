@@ -2448,6 +2448,46 @@ def sarif_rule_id(title):
     return slug or "finding"
 
 
+def sarif_evidence_path(evidence, home):
+    """A path held by the first evidence line, minus any home directory.
+
+    Returns (uri, is_relative). A ~/ path is returned without the prefix as a
+    source-root relative uri. An absolute path is returned as-is for a file://
+    uri. A line with no path has no file location.
+    """
+    if not evidence:
+        return None, False
+    text = clean(evidence[0])
+    try:
+        ahome = os.path.abspath(home).rstrip(os.sep)
+        if ahome:
+            text = text.replace(ahome + os.sep, "~/")
+            text = re.sub(re.escape(ahome) + r"(?![\w.-])", "~", text)
+    except (OSError, ValueError):
+        pass
+    match = re.search(r"~/(\S+)", text)
+    if match:
+        uri = match.group(1).rstrip(":;,")
+        return (uri, True) if uri else (None, False)
+    match = _ABS_PATH_RE.search(text)
+    if match:
+        uri = match.group(0).rstrip(":;,")
+        return (uri, False) if uri else (None, False)
+    return None, False
+
+
+def sarif_location(item, rule_id, home):
+    """One physicalLocation for a result, with a uri GitHub will accept."""
+    uri, is_relative = sarif_evidence_path(item.get("evidence") or [], home)
+    if uri is None:
+        artifact = {"uri": "blastcheck/" + rule_id}
+    elif is_relative:
+        artifact = {"uri": uri, "uriBaseId": "SRCROOT"}
+    else:
+        artifact = {"uri": "file://" + uri}
+    return {"artifactLocation": artifact}
+
+
 def render_sarif(data, home):
     rules = []
     rule_ids = {}
@@ -2479,11 +2519,17 @@ def render_sarif(data, home):
         evidence = [sarif_safe(e, home) for e in item["evidence"]]
         if evidence:
             parts.append("Evidence: " + "; ".join(evidence))
+        location = sarif_location(item, rule_id, home)
+        uri = location["artifactLocation"]["uri"]
         results.append(
             {
                 "ruleId": rule_id,
                 "level": SARIF_LEVELS[item["severity"]],
                 "message": {"text": " ".join(parts)},
+                "locations": [{"physicalLocation": location}],
+                "partialFingerprints": {
+                    "primaryLocationLineHash": rule_id + ":" + uri,
+                },
             }
         )
     document = {

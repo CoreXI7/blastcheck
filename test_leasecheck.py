@@ -316,8 +316,15 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(self.run_cli("--json").returncode, 0)
 
     def test_hostile_file_names_are_safe(self):
-        raw = os.fsencode(self.home) + b"/.env\xff\x1b[31m\xe2\x80\xae"
-        with open(raw, "w") as handle:
+        base = os.fsencode(self.home) + b"/.env"
+        try:
+            # Linux allows any bytes; macOS rejects names that aren't UTF-8.
+            raw = base + b"\xff\x1b[31m\xe2\x80\xae"
+            handle = open(raw, "w")
+        except OSError:
+            raw = base + b"\x1b[31m\xe2\x80\xae"
+            handle = open(raw, "w")
+        with handle:
             handle.write("API_KEY=abcdefghijkl\n")
         proc = self.run_cli()
         self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -5,8 +5,9 @@ Read-only: this never changes, creates or deletes anything.
 No network: no socket/urllib/http imports and no network subprocesses.
 Single file, Python 3.10+, standard library only.
 
-Usage: python3 leasecheck.py [--json] [--all] [--home DIR] [--show-hosts]
-                             [--fail-on critical|high|medium]
+Usage: python3 leasecheck.py [--json | --sarif] [--all] [--home DIR]
+                             [--show-hosts] [--fail-on critical|high|medium]
+                             [--version]
 """
 
 import argparse
@@ -18,6 +19,8 @@ import stat
 import subprocess
 import sys
 import time
+
+VERSION = '0.2.0'
 
 MAX_FILES = 20_000
 MAX_SECONDS = 20.0
@@ -178,6 +181,17 @@ KNOWN_PEM = {
 
 KNOWN_DANGER_SETTINGS = {"dangerouslySkipPermissions"}
 
+BROAD_BASH_RULES = {"Bash", "Bash(*)", "Bash(:*)"}
+
+BROAD_BASH_PREFIXES = (
+    "Bash(sudo",
+    "Bash(su ",
+    "Bash(bash",
+    "Bash(sh ",
+    "Bash(curl",
+    "Bash(wget",
+)
+
 # Running any of these as root without a password is as good as root itself.
 ROOT_EQUIVALENT_PROGRAMS = {
     "su", "sudo", "sudoedit", "bash", "sh", "dash", "zsh", "fish", "env", "docker",
@@ -225,6 +239,16 @@ _CODEX_SANDBOX_RE = re.compile(
 _CODEX_APPROVAL_RE = re.compile(
     r"""^\s*approval_policy\s*=\s*['"]never['"]""", re.I | re.M
 )
+
+_AIDER_YES_ALWAYS_RE = re.compile(
+    r"""^\s*yes-always\s*:\s*['"]?true['"]?\s*(?:#.*)?$""", re.I
+)
+
+_ABS_PATH_RE = re.compile(
+    r"""(?<![\w./:~])/(?:[A-Za-z0-9._@%+-]+)(?:/[A-Za-z0-9._@%+-]+)*"""
+)
+
+_WIN_ABS_PATH_RE = re.compile(r"""(?<![\w])[A-Za-z]:[\\/][^\s;]*""")
 
 
 def clean(value):
@@ -434,6 +458,54 @@ def claude_risky_settings(text):
                 elif isinstance(value, (dict, list)):
                     stack.append(value)
     return sorted(found)
+
+
+def broad_bash_rule(rule):
+    """True when a Claude allow rule lets an agent run wide shell commands."""
+    rule = rule.strip()
+    return rule in BROAD_BASH_RULES or rule.startswith(BROAD_BASH_PREFIXES)
+
+
+def rule_label(rule):
+    """Show which broad rule matched, never the rest, which may hold a value."""
+    rule = rule.strip()
+    if rule in BROAD_BASH_RULES:
+        return rule
+    for prefix in BROAD_BASH_PREFIXES:
+        if rule.startswith(prefix):
+            return prefix.strip() + (" ...)" if rule != prefix.strip() + ")" else ")")
+    return "Bash(...)"
+
+
+def claude_allow_rules(text):
+    """Matching broad Bash entries from every permissions.allow list."""
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return []
+    found = []
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, dict):
+            permissions = node.get("permissions")
+            if isinstance(permissions, dict):
+                allow = permissions.get("allow")
+                if isinstance(allow, list):
+                    for rule in allow:
+                        if (
+                            isinstance(rule, str)
+                            and broad_bash_rule(rule)
+                            and rule not in found
+                        ):
+                            found.append(rule)
+            stack.extend(
+                value for value in node.values()
+                if isinstance(value, (dict, list))
+            )
+    return found
 
 
 def opencode_permission_tools(text):
@@ -1160,6 +1232,27 @@ class Scanner:
                         ],
                         "Remove that setting or use the default permission mode.",
                     )
+                rules = claude_allow_rules(text)
+                if rules:
+                    shown = [rule_label(rule) for rule in rules[:10]]
+                    detail = (
+                        f"{display_path(path, home)} (allow rules: "
+                        + ", ".join(shown)
+                        + ")"
+                    )
+                    if len(rules) > 10:
+                        detail += (
+                            f"; {len(rules) - 10} more rule(s) not shown"
+                        )
+                    self.finding(
+                        "high",
+                        "Claude Code may run commands without asking",
+                        "An allow rule lets the agent run broad shell "
+                        "commands without asking you.",
+                        [detail],
+                        "Remove broad Bash allow rules or narrow them to the "
+                        "specific commands the agent needs.",
+                    )
 
         opencode_dir = os.path.join(home, ".config", "opencode")
         opencode_files = (
@@ -1261,6 +1354,19 @@ class Scanner:
             ],
             "Review its auto-approval settings before letting it work unattended.",
         )
+        aider_config = os.path.join(home, ".aider.conf.yml")
+        aider_text = self.read_text_limited(aider_config)
+        if aider_text is not None and any(
+            _AIDER_YES_ALWAYS_RE.match(line)
+            for line in aider_text.splitlines()
+        ):
+            self.finding(
+                "high",
+                "Aider approves every action",
+                "Aider applies edits and runs commands without asking you.",
+                [display_path(aider_config, home)],
+                "Remove yes-always: true or set it to false.",
+            )
         self.detect_agent(
             "Gemini CLI",
             [
@@ -1591,6 +1697,93 @@ def render_json(data):
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+SARIF_LEVELS = {
+    "critical": "error",
+    "high": "error",
+    "medium": "warning",
+    "info": "note",
+}
+
+
+def sarif_safe(value, home):
+    """Clean a string and remove absolute filesystem paths for SARIF."""
+    text = clean(value)
+    try:
+        ahome = os.path.abspath(home).rstrip(os.sep)
+        if ahome:
+            text = text.replace(ahome + os.sep, "~/")
+            text = re.sub(re.escape(ahome) + r"(?![\w.-])", "~", text)
+    except (OSError, ValueError):
+        pass
+    text = _WIN_ABS_PATH_RE.sub("[path hidden]", text)
+    return _ABS_PATH_RE.sub("[path hidden]", text)
+
+
+def sarif_rule_id(title):
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return slug or "finding"
+
+
+def render_sarif(data, home):
+    rules = []
+    rule_ids = {}
+    used_ids = set()
+    results = []
+    for item in data["findings"]:
+        title = clean(item["title"])
+        rule_id = rule_ids.get(title)
+        if rule_id is None:
+            base = sarif_rule_id(title)
+            rule_id = base
+            suffix = 2
+            while rule_id in used_ids:
+                rule_id = base + "-" + str(suffix)
+                suffix += 1
+            used_ids.add(rule_id)
+            rule_ids[title] = rule_id
+            rules.append(
+                {
+                    "id": rule_id,
+                    "shortDescription": {"text": title},
+                    "fullDescription": {
+                        "text": sarif_safe(item["why"], home)
+                    },
+                    "help": {"text": sarif_safe(item["fix"], home)},
+                }
+            )
+        parts = [sarif_safe(item["why"], home)]
+        evidence = [sarif_safe(e, home) for e in item["evidence"]]
+        if evidence:
+            parts.append("Evidence: " + "; ".join(evidence))
+        results.append(
+            {
+                "ruleId": rule_id,
+                "level": SARIF_LEVELS[item["severity"]],
+                "message": {"text": " ".join(parts)},
+            }
+        )
+    document = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "leasecheck",
+                        "version": VERSION,
+                        "informationUri": (
+                            "https://github.com/CoreXI7/leasecheck"
+                        ),
+                        "rules": rules,
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }
+    return json.dumps(document, indent=2, ensure_ascii=False)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="leasecheck",
@@ -1600,7 +1793,19 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--version",
+        action="version",
+        version="leasecheck " + VERSION,
+        help="print the version and exit",
+    )
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument(
         "--json", action="store_true", help="print the same data as JSON"
+    )
+    output.add_argument(
+        "--sarif",
+        action="store_true",
+        help="print SARIF 2.1.0 JSON instead of text",
     )
     parser.add_argument(
         "--all",
@@ -1643,11 +1848,14 @@ def main(argv=None):
 
     color = (
         not args.json
+        and not args.sarif
         and sys.stdout.isatty()
         and os.environ.get("NO_COLOR") is None
         and os.environ.get("TERM") != "dumb"
     )
-    if args.json:
+    if args.sarif:
+        sys.stdout.write(render_sarif(data, home) + "\n")
+    elif args.json:
         sys.stdout.write(render_json(data) + "\n")
     else:
         sys.stdout.write(render_text(data, color, args.all) + "\n")

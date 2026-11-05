@@ -6,6 +6,7 @@ No network: no socket/urllib/http imports and no network subprocesses.
 Single file, Python 3.10+, standard library only.
 
 Usage: python3 leasecheck.py [--json] [--all] [--home DIR] [--show-hosts]
+                             [--fail-on critical|high|medium]
 """
 
 import argparse
@@ -22,6 +23,7 @@ MAX_FILES = 20_000
 MAX_SECONDS = 20.0
 MAX_SIZE = 1024 * 1024
 MAX_DEPTH = 4
+SETTINGS_MAX_SIZE = 16 * 1024 * 1024
 MAX_GROUP_EVIDENCE = 10
 
 SEVERITIES = ("critical", "high", "medium", "info")
@@ -64,9 +66,19 @@ SKIP_DIRS = {
     ".ruff_cache",
     ".trash",
     "trash",
+    "mobile documents",
+    "cloudstorage",
 }
 
 SECRET_FILE_NAMES = {".netrc", ".pgpass", ".npmrc", ".pypirc"}
+
+SKIP_ENV_NAMES = {
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.dist",
+    ".env.defaults",
+}
 
 TEXT_EXTS = {
     ".env",
@@ -136,12 +148,14 @@ SECRET_WORDS = {
     "CREDS",
     "AUTHTOKEN",
     "BEARER",
+    "AUTHORIZATION",
 }
 
 # Names like TOKEN_COUNT or PASSWORD_URL describe a secret, not hold one.
 NOT_SECRET_ENDINGS = {
     "DATE", "TIME", "COUNT", "LIMIT", "LENGTH", "SIZE", "TYPE", "URL", "URI",
     "FILE", "PATH", "EXPIRY", "EXPIRES", "ENABLED", "REQUIRED", "USAGE",
+    "NAME", "REF", "REFS", "KEYREF", "SECRETREF", "SELECTOR", "PREFIX",
 }
 
 KEY_PREFIXES = {"API", "ACCESS", "SECRET", "PRIVATE", "AUTH", "ENCRYPTION", "SIGNING"}
@@ -157,6 +171,22 @@ PLACEHOLDER_VALUES = {
     "password", "secret", "token", "required", "optional",
 }
 
+KNOWN_PEM = {
+    "PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY",
+    "DSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "CERTIFICATE", "PUBLIC KEY",
+}
+
+KNOWN_DANGER_SETTINGS = {"dangerouslySkipPermissions"}
+
+# Running any of these as root without a password is as good as root itself.
+ROOT_EQUIVALENT_PROGRAMS = {
+    "su", "sudo", "sudoedit", "bash", "sh", "dash", "zsh", "fish", "env", "docker",
+    "podman", "systemctl", "python", "python3", "perl", "ruby", "node", "vi", "vim",
+    "nvim", "nano", "less", "more", "man", "find", "awk", "gawk", "sed", "tee", "cp",
+    "mv", "dd", "chmod", "chown", "tar", "rsync", "apt", "apt-get", "dpkg", "yum",
+    "dnf", "pip", "pip3", "git", "make", "crontab", "mount",
+}
+
 SAVED_LOGINS = (
     (".aws/credentials", "AWS credentials"),
     (".config/gh/hosts.yml", "GitHub CLI login"),
@@ -165,6 +195,14 @@ SAVED_LOGINS = (
     (".config/gcloud", "Google Cloud credentials directory"),
     (".azure", "Azure credentials directory"),
     (".git-credentials", "Git credential store"),
+)
+
+MCP_CONFIG_PATHS = (
+    ".claude.json",
+    ".cursor/mcp.json",
+    ".codeium/windsurf/mcp_config.json",
+    ".gemini/settings.json",
+    ".config/opencode/opencode.json",
 )
 
 _CONTROL_RE = re.compile(
@@ -205,10 +243,19 @@ def display_path(path, home):
             rel = os.path.relpath(apath, ahome)
             if rel == ".":
                 return "~"
-            return "~/" + rel.replace(os.sep, "/")
+            return "~/" + hide_token_parts(rel)
     except (ValueError, OSError):
         pass
-    return path.replace(os.sep, "/")
+    return hide_token_parts(path)
+
+
+def hide_token_parts(path):
+    parts = []
+    for part in path.split(os.sep):
+        words = re.split(r"[^A-Za-z0-9]+", part)
+        hidden = any(len(w) >= 16 and token_shaped(w, 32) for w in words)
+        parts.append("[name hidden]" if hidden else part)
+    return "/".join(parts)
 
 
 def name_words(name):
@@ -230,11 +277,15 @@ def looks_like_secret_name(name):
 
 def safe_name(name):
     """Hide a variable name that could itself hold a credential."""
-    if len(name) > 48 or any(
-        len(w) >= 16 and any(c.isdigit() for c in w) for w in name_words(name)
-    ):
+    if len(name) > 48 or any(token_shaped(w, 12) for w in name_words(name)):
         return "[unusual name hidden]"
     return name
+
+
+def token_shaped(word, long_len):
+    """A word long enough, or mixed enough, that it could be a credential."""
+    mixed = any(c.isdigit() for c in word) and any(c.isalpha() for c in word)
+    return len(word) >= long_len or (mixed and len(word) >= 8)
 
 
 def holds_literal_value(value):
@@ -242,9 +293,84 @@ def holds_literal_value(value):
     value = value.strip().rstrip(",;").strip("\"'` ")
     if len(value) < 6 or value.lower() in PLACEHOLDER_VALUES:
         return False
-    if value[0] in "$<{[(%#" or value.startswith(("os.", "process.", "env.", "xxx")):
+    if value[0] in "$<{[(%#" or value.startswith(
+        (
+            "os.",
+            "process.",
+            "env.",
+            "xxx",
+            "var.",
+            "local.",
+            "module.",
+            "each.",
+            "data.",
+            "!vault",
+        )
+    ):
         return False
     return not re.fullmatch(r"[0-9.]+", value)
+
+
+def stored_in_args(server):
+    """Names of credentials passed in a server's args or embedded in its url.
+
+    Returns labels only. Values are looked at to judge them, and never kept.
+    """
+    found = set()
+    args = server.get("args") if isinstance(server.get("args"), list) else []
+    args = [a for a in args if isinstance(a, str)]
+    for i, arg in enumerate(args):
+        if not arg.startswith("-"):
+            continue
+        flag, sep, value = arg.partition("=")
+        if not sep:
+            value = args[i + 1] if i + 1 < len(args) else ""
+        if looks_like_secret_name(flag.lstrip("-")) and holds_literal_value(value):
+            found.add("argument " + safe_name(flag))
+    for key in ("url", "serverUrl", "httpUrl"):
+        url = server.get(key)
+        if not isinstance(url, str):
+            continue
+        if re.match(r"[a-z][a-z0-9+.-]*://[^/@?#]+@", url, re.I):
+            found.add("login inside " + key)
+        query = url.partition("?")[2].partition("#")[0]
+        for pair in query.split("&"):
+            name, sep, value = pair.partition("=")
+            if sep and looks_like_secret_name(name) and holds_literal_value(value):
+                found.add(key + " parameter " + safe_name(name))
+    return found
+
+
+def collect_mcp_servers(data):
+    """Server name/object pairs found under any mcpServers or mcp key.
+
+    Each child object of those keys is one server. Only names are kept; the
+    server's args, env, headers and urls are never read out here.
+    """
+    servers = {}
+    seen = set()
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            for key in ("mcpServers", "mcp"):
+                block = node.get(key)
+                if isinstance(block, dict):
+                    for name, server in block.items():
+                        if isinstance(server, dict):
+                            servers.setdefault(str(name), server)
+            stack.extend(
+                value for value in node.values()
+                if isinstance(value, (dict, list))
+            )
+        elif isinstance(node, list):
+            stack.extend(
+                value for value in node if isinstance(value, (dict, list))
+            )
+    return servers
 
 
 def is_text_candidate(basename):
@@ -291,7 +417,7 @@ def claude_risky_settings(text):
     """Names of settings that are on and turn off Claude Code's prompts."""
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return []
     found = set()
     stack = [data]
@@ -304,10 +430,35 @@ def claude_risky_settings(text):
                 if key == "defaultMode" and value == "bypassPermissions":
                     found.add("defaultMode: bypassPermissions")
                 elif value is True and _CLAUDE_RISK_RE.match(key):
-                    found.add(key)
+                    found.add(key if key in KNOWN_DANGER_SETTINGS else "a dangerously* setting")
                 elif isinstance(value, (dict, list)):
                     stack.append(value)
     return sorted(found)
+
+
+def opencode_permission_tools(text):
+    """Return (has_permission_key, allowed_tools) for an OpenCode config.
+
+    allowed_tools holds "all" when the whole permission is allow, otherwise the
+    names of bash, shell, edit or write rules that are set to allow.
+    """
+    match = re.search(r'"permission"\s*:', text)
+    if not match:
+        return False, []
+    rest = text[match.end():].lstrip()
+    if re.match(r'"allow"', rest):
+        return True, ["all"]
+    if not rest.startswith("{"):
+        return True, []
+    body = rest[:20000]
+    tools = [
+        tool
+        for tool in ("bash", "shell", "edit", "write")
+        if re.search(
+            r'"' + tool + r'"\s*:\s*(\{[^{}]*"\*"\s*:\s*)?"allow"', body
+        )
+    ]
+    return True, tools
 
 
 def run_fixed(argv):
@@ -386,31 +537,32 @@ class Scanner:
         st = self.lstat_nofollow(path)
         return st is not None and stat.S_ISREG(st.st_mode)
 
-    def open_regular(self, path):
+    def open_regular(self, path, limit=MAX_SIZE):
         """Open a regular file without following a final symlink or blocking."""
         flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
         fd = os.open(path, flags)
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_SIZE:
+            if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
                 raise OSError("not a regular file of allowed size")
             return os.fdopen(fd, "rb")
         except OSError:
             os.close(fd)
             raise
 
-    def read_text_limited(self, path):
+    def read_text_limited(self, path, limit=MAX_SIZE):
         st = self.lstat_nofollow(path)
         if st is None:
             return None
         if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
             return None
-        if st.st_size > MAX_SIZE:
+        if st.st_size > limit:
             self.skipped_large += 1
+            self.note("Skipped, too large to check: " + display_path(path, self.home))
             return None
         try:
-            with self.open_regular(path) as handle:
-                return handle.read(MAX_SIZE).decode("utf-8", errors="ignore")
+            with self.open_regular(path, limit) as handle:
+                return handle.read(limit).decode("utf-8", errors="ignore")
         except OSError:
             self.permission_errors += 1
             return None
@@ -432,6 +584,8 @@ class Scanner:
         never kept or printed. The first line alone can't tell for OpenSSH keys.
         """
         kind = match.group(1).upper()
+        if kind not in KNOWN_PEM:
+            return "PRIVATE KEY" if "PRIVATE KEY" in kind else "UNRECOGNIZED BLOCK"
         if "PRIVATE KEY" not in kind or "ENCRYPTED" in kind:
             return kind
         try:
@@ -488,14 +642,19 @@ class Scanner:
         sockets = (
             "/var/run/docker.sock",
             os.path.join(self.home, ".docker", "run", "docker.sock"),
+            os.path.join(self.home, ".orbstack", "run", "docker.sock"),
+            os.path.join(self.home, ".colima", "default", "docker.sock"),
         )
         for socket_path in sockets:
             st = self.lstat_nofollow(socket_path)
             if st is None:
                 continue
             if stat.S_ISLNK(st.st_mode):
-                continue
-            if not (stat.S_ISSOCK(st.st_mode) or stat.S_ISREG(st.st_mode)):
+                socket_path = os.path.realpath(socket_path)
+                st = self.lstat_nofollow(socket_path)
+                if st is None:
+                    continue
+            if not stat.S_ISSOCK(st.st_mode):
                 continue
             if os.access(socket_path, os.W_OK):
                 self.finding(
@@ -513,13 +672,23 @@ class Scanner:
             self.note("Passwordless sudo could not be checked (sudo unavailable).")
         elif result.returncode == 0:
             commands = sudo_nopass_commands(result.stdout)
-            unrestricted = "ALL" in commands
+            unrestricted = any(
+                c == "ALL"
+                or "*" in c.split()[0]
+                or os.path.basename(c.split()[0]) in ROOT_EQUIVALENT_PROGRAMS
+                or re.match(r"python[0-9.]*$", os.path.basename(c.split()[0]))
+                for c in commands
+                if c.split()
+            )
             if unrestricted:
                 self.finding(
                     "critical",
-                    "Passwordless sudo allows everything",
-                    "An agent could run any command as root without a password.",
-                    ["sudo -n -l grants NOPASSWD: ALL"],
+                    "Passwordless sudo gives full root",
+                    "An agent could run any command as root without a password, "
+                    "directly or through a program that can start other programs.",
+                    ["programs: " + ", ".join(sorted({
+                        clean(c.split()[0])[:80] for c in commands if c.split()
+                    })[:8])],
                     "Remove the NOPASSWD rule and require a password, or scope it "
                     "to a few read-only commands.",
                 )
@@ -545,6 +714,23 @@ class Scanner:
                 self.note("No passwordless sudo rules found.")
         else:
             self.note("Sudo rules could not be listed without a password.")
+
+    def check_ssh_agent(self):
+        sock = os.environ.get("SSH_AUTH_SOCK")
+        if not sock:
+            return
+        st = self.lstat_nofollow(sock)
+        if st is None or not stat.S_ISSOCK(st.st_mode) or not os.access(sock, os.W_OK):
+            return
+        self.finding(
+            "high",
+            "SSH agent available to anything you start",
+            "An agent can sign in with every key loaded in it, including keys "
+            "that have a passphrase.",
+            ["SSH_AUTH_SOCK points to a usable socket"],
+            "Don't start agents from a shell with SSH_AUTH_SOCK set, or use "
+            "ssh-add -c so each use needs your confirmation.",
+        )
 
     def check_ssh(self):
         ssh_dir = os.path.join(self.home, ".ssh")
@@ -664,12 +850,15 @@ class Scanner:
         if hosts:
             evidence.append(
                 f"SSH config has {len(hosts)} Host entries: "
-                + ", ".join(hosts[:20])
+                + ", ".join(safe_name(h) for h in hosts[:20])
             )
             if len(hosts) > 20:
                 evidence.append(f"{len(hosts) - 20} more Host alias(es) not shown")
             if self.show_hosts and host_names:
-                evidence.append("HostName addresses: " + ", ".join(host_names[:20]))
+                evidence.append(
+                    "HostName addresses: "
+                    + ", ".join(safe_name(h) for h in host_names[:20])
+                )
         elif config_text is not None:
             evidence.append("SSH config has no Host entries")
         if known_count:
@@ -781,6 +970,8 @@ class Scanner:
             "authorized_keys2",
         }:
             return
+        if lower in SKIP_ENV_NAMES:
+            return
 
         if lower.endswith(".pem") or lower.endswith(".key"):
             first = self.read_first_line(path)
@@ -789,7 +980,8 @@ class Scanner:
                 match = _PEM_RE.match(first)
                 if match:
                     header = self.pem_kind(path, match)
-            self.report_key_file(path, header)
+            if header and "PRIVATE KEY" in header:
+                self.report_key_file(path, header)
             return
 
         if lower.startswith(".env") or lower in SECRET_FILE_NAMES:
@@ -802,6 +994,10 @@ class Scanner:
             names, line_count = self.scan_secret_names(path)
             if names is None:
                 names = set()
+            if not names and (
+                lower.startswith(".env") or lower in {".npmrc", ".pypirc"}
+            ):
+                return
             self.add_secret(path, line_count, names)
             return
 
@@ -831,6 +1027,11 @@ class Scanner:
         def on_error(_error):
             self.permission_errors += 1
 
+        try:
+            home_dev = os.lstat(home).st_dev
+        except OSError:
+            return
+
         for dirpath, dirnames, filenames in os.walk(
             home, topdown=True, followlinks=False, onerror=on_error
         ):
@@ -846,7 +1047,11 @@ class Scanner:
             for name in dirnames:
                 lower = name.lower()
                 child = os.path.join(dirpath, name)
-                if os.path.islink(child):
+                try:
+                    child_st = os.lstat(child)
+                except OSError:
+                    continue
+                if stat.S_ISLNK(child_st.st_mode) or child_st.st_dev != home_dev:
                     continue
                 if lower in SKIP_DIRS:
                     continue
@@ -938,7 +1143,7 @@ class Scanner:
                 os.path.join(claude_dir, "settings.local.json"),
                 claude_json,
             ):
-                text = self.read_text_limited(path)
+                text = self.read_text_limited(path, SETTINGS_MAX_SIZE)
                 if not text:
                     continue
                 tokens = claude_risky_settings(text)
@@ -977,45 +1182,32 @@ class Scanner:
                 if text is None:
                     continue
                 saw_config = True
-                if not re.search(r'"permission"\s*:', text):
+                has_permission, allowed = opencode_permission_tools(text)
+                if not has_permission:
                     continue
                 saw_permission = True
-                if re.search(r'"permission"\s*:\s*"?allow"?', text) or re.search(
-                    r'"permission"\s*:\s*\{[^}]*"allow"', text, re.S
-                ):
+                if allowed:
+                    if allowed == ["all"]:
+                        detail = "permission = allow"
+                    else:
+                        detail = "permission allow for: " + ", ".join(allowed)
                     self.finding(
                         "high",
                         "OpenCode permission is set to allow",
                         "The agent can use tools without asking you first.",
-                        [display_path(path, home) + " (permission = allow)"],
+                        [display_path(path, home) + " (" + detail + ")"],
                         'Change "permission" to "ask" or a narrower rule.',
                     )
             if not saw_permission:
                 if saw_config:
-                    self.finding(
-                        "medium",
-                        "OpenCode has no permission restriction",
-                        "Without an explicit permission key, the agent may use "
-                        "tools without asking.",
-                        [
-                            "configuration files found: "
-                            + ", ".join(
-                                display_path(p, home)
-                                for p in opencode_files
-                                if self.lstat_nofollow(p) is not None
-                            )
-                            + "; no permission key"
-                        ],
-                        'Add "permission": "ask" to the OpenCode config.',
+                    self.note(
+                        "OpenCode config has no permission key, so tool "
+                        "permission is not confirmed; check it manually."
                     )
                 else:
-                    self.finding(
-                        "medium",
-                        "OpenCode has no permission restriction",
-                        "The agent is installed but has no permission settings "
-                        "limiting what it may do.",
-                        [display_path(opencode_dir, home) + "; no config file found"],
-                        'Add "permission": "ask" to the OpenCode config.',
+                    self.note(
+                        "OpenCode is installed but no config file was found; "
+                        "tool permission is not confirmed."
                     )
 
         codex_dir = os.path.join(home, ".codex")
@@ -1056,6 +1248,7 @@ class Scanner:
                 os.path.join(home, ".cursor"),
                 os.path.join(home, ".config", "Cursor"),
                 os.path.join(home, ".config", "cursor"),
+                os.path.join(home, "Library", "Application Support", "Cursor"),
             ],
             "Review its approval settings before letting it work unattended.",
         )
@@ -1077,27 +1270,124 @@ class Scanner:
             "Review its approval settings before letting it work unattended.",
         )
 
+    def check_environment(self):
+        names = set()
+        for name, value in os.environ.items():
+            if looks_like_secret_name(name) and holds_literal_value(value):
+                names.add(safe_name(name))
+        if not names:
+            return
+        shown = sorted(names)
+        evidence = "environment variables: " + ", ".join(shown[:20])
+        if len(shown) > 20:
+            evidence += " (+{} more)".format(len(shown) - 20)
+        self.finding(
+            "medium",
+            "Credentials in your shell environment",
+            "Any agent you start inherits these variables and can read the "
+            "credentials.",
+            [evidence],
+            "Remove long-lived credentials from your shell environment; use a "
+            "credential helper or short-lived tokens instead.",
+        )
+
+    def check_mcp(self):
+        for rel in MCP_CONFIG_PATHS:
+            path = os.path.join(self.home, rel)
+            text = self.read_text_limited(path, SETTINGS_MAX_SIZE)
+            if text is None:
+                continue
+            try:
+                data = json.loads(text)
+            except (ValueError, RecursionError):
+                continue
+            servers = collect_mcp_servers(data)
+            if not servers:
+                continue
+            count = len(servers)
+            names = sorted({safe_name(name) for name in servers})
+            evidence = "{}: {} server(s): {}".format(
+                display_path(path, self.home), count, ", ".join(names[:20])
+            )
+            if len(names) > 20:
+                evidence += " (+{} more name(s))".format(len(names) - 20)
+            self.finding(
+                "info",
+                "MCP servers an agent can use",
+                "Each MCP server gives an agent another tool it can call with "
+                "your permissions.",
+                [evidence],
+                "Remove MCP servers you do not use and review what each one "
+                "can reach.",
+            )
+            for name, server in servers.items():
+                for label in sorted(stored_in_args(server)):
+                    self.finding(
+                        "high",
+                        "Credential stored in an MCP config",
+                        "The credential is stored in plain text, where an "
+                        "agent can read it.",
+                        [
+                            "{}: server {}, {}".format(
+                                display_path(path, self.home),
+                                safe_name(str(name)),
+                                label,
+                            )
+                        ],
+                        "Replace the stored value with an environment "
+                        "reference or a credential helper.",
+                    )
+                for key in ("env", "headers"):
+                    block = server.get(key)
+                    if not isinstance(block, dict):
+                        continue
+                    for child, value in block.items():
+                        if not isinstance(value, str):
+                            continue
+                        if not looks_like_secret_name(str(child)):
+                            continue
+                        if not holds_literal_value(value):
+                            continue
+                        self.finding(
+                            "high",
+                            "Credential stored in an MCP config",
+                            "The credential is stored in plain text, where an "
+                            "agent can read it.",
+                            [
+                                "{}: server {}, {}".format(
+                                    display_path(path, self.home),
+                                    safe_name(str(name)),
+                                    safe_name(str(child)),
+                                )
+                            ],
+                            "Replace the stored value with an environment "
+                            "reference or a credential helper.",
+                        )
+
     def check_startup_writable(self):
-        for path in (
-            os.path.join(self.home, ".bashrc"),
-            os.path.join(self.home, ".profile"),
-            os.path.join(self.home, ".ssh", "authorized_keys"),
+        present = []
+        for rel in (
+            ".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc",
+            ".zprofile", ".zshenv", ".zlogin", ".ssh/authorized_keys",
         ):
+            path = os.path.join(self.home, rel)
             st = self.lstat_nofollow(path)
             if st is None or stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
                 continue
-            if not os.access(path, os.W_OK):
-                continue
-            self.finding(
-                "info",
-                "Writable startup file",
-                "An agent could plant commands here to run at your next login.",
-                [
-                    f"{display_path(path, self.home)} "
-                    f"(writable, mode {mode_string(st)})"
-                ],
-                "Review this file's contents; an agent with write access can add "
-                "commands that run at login.",
+            present.append(rel)
+            if stat.S_IMODE(st.st_mode) & (stat.S_IWGRP | stat.S_IWOTH):
+                self.finding(
+                    "high",
+                    "Startup file writable by group or others",
+                    "Another user could plant commands that run when you log in.",
+                    [f"{display_path(path, self.home)} (mode {mode_string(st)})"],
+                    "Restrict it to its owner (chmod 600 or 644).",
+                )
+        if present:
+            self.note(
+                "An agent running as you can edit your startup files ("
+                + ", ".join(present)
+                + "), so check them after unattended runs."
             )
 
     def check_loose_perms(self):
@@ -1128,8 +1418,11 @@ class Scanner:
             return self.result()
         self.check_root_paths()
         self.check_ssh()
+        self.check_ssh_agent()
         self.check_saved_logins()
         self.check_agents()
+        self.check_environment()
+        self.check_mcp()
         self.check_startup_writable()
         self.scan_secrets_walk()
         self.check_loose_perms()
@@ -1322,7 +1615,16 @@ def main(argv=None):
         action="store_true",
         help="also show HostName addresses from the SSH config",
     )
+    parser.add_argument(
+        "--fail-on",
+        choices=("critical", "high", "medium"),
+        default=None,
+        help="exit 1 if any finding is at this severity or worse",
+    )
     args = parser.parse_args(argv)
+    if os.name != "posix":
+        sys.stderr.write("leasecheck runs on Linux and macOS only.\n")
+        return 2
 
     try:
         reconfigure = getattr(sys.stdout, "reconfigure", None)
@@ -1349,6 +1651,14 @@ def main(argv=None):
         sys.stdout.write(render_json(data) + "\n")
     else:
         sys.stdout.write(render_text(data, color, args.all) + "\n")
+
+    if args.fail_on is not None:
+        threshold = RANK[args.fail_on]
+        if any(RANK[item["severity"]] <= threshold for item in data["findings"]):
+            return 1
+        if data["scan"]["stopped_early"]:
+            sys.stderr.write("Scan stopped early, so this result is incomplete.\n")
+            return 2
     return 0
 
 

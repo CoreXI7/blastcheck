@@ -39,6 +39,11 @@ def scan(home, extra_env=None, *args):
     )
 
 
+def letters(count):
+    """Random letters only: names mixing letters and digits are hidden on purpose."""
+    return "".join(chr(65 + int(c, 16)) for c in uuid.uuid4().hex[:count])
+
+
 def unique_value(prefix):
     return prefix + uuid.uuid4().hex
 
@@ -55,7 +60,7 @@ def expected_exit(data, level):
 class EnvironmentCheckTest(unittest.TestCase):
     def test_literal_credential_is_reported_without_its_value(self):
         with tempfile.TemporaryDirectory() as home:
-            name = "LEASE_TOKEN_" + uuid.uuid4().hex[:8].upper()
+            name = "LEASE_TOKEN_" + letters(8)
             value = unique_value("tok_")
             result = scan(home, {name: value}, "--json")
             self.assertEqual(result.returncode, 0)
@@ -71,8 +76,8 @@ class EnvironmentCheckTest(unittest.TestCase):
 
     def test_reference_and_placeholder_values_are_ignored(self):
         with tempfile.TemporaryDirectory() as home:
-            reference_name = "LEASE_TOKEN_" + uuid.uuid4().hex[:8].upper()
-            placeholder_name = "LEASE_SECRET_" + uuid.uuid4().hex[:8].upper()
+            reference_name = "LEASE_TOKEN_" + letters(8)
+            placeholder_name = "LEASE_SECRET_" + letters(8)
             result = scan(
                 home,
                 {reference_name: "${SOME_OTHER_TOKEN}", placeholder_name: "changeme"},
@@ -86,7 +91,7 @@ class EnvironmentCheckTest(unittest.TestCase):
 
     def test_fail_on_levels(self):
         with tempfile.TemporaryDirectory() as home:
-            name = "LEASE_TOKEN_" + uuid.uuid4().hex[:8].upper()
+            name = "LEASE_TOKEN_" + letters(8)
             value = unique_value("tok_")
             env = {name: value}
 

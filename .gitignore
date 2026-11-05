@@ -3,3 +3,4 @@ __pycache__/
 .env
 report*.txt
 report*.json
+report*

@@ -128,7 +128,7 @@ class TestClaudeAllowRules(LeasecheckCLITest):
     def test_evidence_lists_at_most_ten_rules(self):
         entries = [BASH + "(sudoCmd%02d)" % index for index in range(12)]
         self.write_claude(entries)
-        proc = self.run_cli()
+        proc = self.run_cli("--json")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(CLAUDE_TITLE, proc.stdout)
         self.assertEqual(proc.stdout.count(BASH + "(sudo ...)"), 10)

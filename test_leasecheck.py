@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import re
 import os
 import shutil
 import stat
@@ -336,7 +337,8 @@ class ReviewRegressionTests(unittest.TestCase):
             self.put("a/{}.env".format(i), "API_KEY=abcdefghijkl\n")
         title = "Secret-looking file in the home directory"
         short = self.run_cli().stdout
-        self.assertIn("[MEDIUM] {} (12 items)".format(title), short)
+        self.assertRegex(short, re.escape(title) + r" +12 items")
+        self.assertIn("MEDIUM", short)
         self.assertIn("2 more evidence lines not shown", short)
         self.assertEqual(self.run_cli("--all").stdout.count(title), 12)
         self.assertEqual(self.titles(self.scan_json()[1]).count(title), 12)

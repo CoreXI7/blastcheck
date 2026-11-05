@@ -5,19 +5,22 @@ Read-only: this never changes, creates or deletes anything.
 No network: no socket/urllib/http imports and no network subprocesses.
 Single file, Python 3.10+, standard library only.
 
-Usage: python3 leasecheck.py [--json | --sarif] [--all] [--home DIR]
+Usage: python3 leasecheck.py [--json | --sarif | --html] [--all] [--home DIR]
                              [--show-hosts] [--fail-on critical|high|medium]
                              [--version]
 """
 
 import argparse
 import base64
+import html
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
+import textwrap
 import time
 
 VERSION = '0.2.0'
@@ -957,7 +960,7 @@ class Scanner:
         shown_names = sorted({safe_name(n) for n in names})[:12]
         if line_count is None:
             if header:
-                line_part = "line count not read (header only)"
+                line_part = "key file"
             else:
                 line_part = "line count not read"
         else:
@@ -1149,6 +1152,8 @@ class Scanner:
                     self.stop("20-second limit")
                     break
                 child = os.path.join(dirpath, basename)
+                if dirpath == os.path.join(home, ".ssh"):
+                    continue  # check_ssh covers these
                 if not self.is_saved_login(child):
                     self.consider_file(child, basename)
 
@@ -1620,77 +1625,796 @@ def summary_line_from_groups(groups):
     return ", ".join(parts)
 
 
-def render_item(lines, item, color):
-    label = "[{}]".format(item["severity"].upper())
-    lines.append(
-        "{} {}".format(colorize(label, item["severity"], color), item["title"])
+TAGLINE = "Show what an AI coding agent running as you could reach."
+MAX_TEXT_WIDTH = 100
+MIN_TEXT_WIDTH = 40
+LABEL_WIDTH = 7
+FINDING_INDENT = 6
+SUMMARY_BAR_WIDTH = 20
+
+SEVERITY_LABELS = {
+    "critical": "Critical",
+    "high": "High",
+    "medium": "Medium",
+    "info": "Info",
+}
+
+
+def use_unicode():
+    """Box drawing is only safe when stdout really speaks UTF-8."""
+    encoding = getattr(sys.stdout, "encoding", None) or ""
+    normalised = encoding.lower().replace("-", "").replace("_", "")
+    return normalised in ("utf8", "utf8mb4")
+
+
+def glyphs():
+    if use_unicode():
+        return {"rule": "\u2500", "bar": "\u2588", "bullet": "\u2022"}
+    return {"rule": "-", "bar": "#", "bullet": "-"}
+
+
+def output_width():
+    try:
+        columns = shutil.get_terminal_size((80, 24)).columns
+    except OSError:
+        columns = 80
+    return max(MIN_TEXT_WIDTH, min(columns, MAX_TEXT_WIDTH))
+
+
+def plural(count, word):
+    return "{} {}{}".format(count, word, "" if count == 1 else "s")
+
+
+def wrap_lines(text, width):
+    width = max(10, width)
+    lines = []
+    for paragraph in str(text).splitlines() or [""]:
+        wrapped = textwrap.wrap(
+            paragraph,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+        lines.extend(wrapped or [""])
+    return lines
+
+
+def rule_heading(text, width, marks):
+    label = " {} ".format(text)
+    rule = marks["rule"]
+    if width <= len(label) + 2:
+        return label.strip()
+    return rule * 2 + label + rule * (width - len(label) - 2)
+
+
+def severity_heading(severity, detail, width, marks, color):
+    name = severity.upper()
+    plain = " {}  {} ".format(name, detail)
+    if width <= len(plain) + 2:
+        return colorize(name, severity, color) + plain[len(name) + 1:].rstrip()
+    colored = " " + colorize(name, severity, color) + plain[len(name) + 1:]
+    return marks["rule"] * 2 + colored + marks["rule"] * (
+        width - len(plain) - 2
     )
-    lines.append("  Why: " + item["why"])
-    if item["evidence"]:
-        lines.append("  Evidence:")
-        for evidence in item["evidence"]:
-            lines.append("    - " + evidence)
-    lines.append("  Fix: " + item["fix"])
+
+
+def add_labelled(lines, label, text, width, indent=FINDING_INDENT, label_width=LABEL_WIDTH):
+    column = indent + label_width
+    body = wrap_lines(text, width - column)
+    lines.append(" " * indent + label.ljust(label_width) + body[0])
+    for line in body[1:]:
+        lines.append(" " * column + line)
+
+
+def add_evidence(lines, evidence, hidden, marks, width):
+    column = FINDING_INDENT + LABEL_WIDTH
+    available = width - column - 2
+    bullet = marks["bullet"] + " "
+    for index, item in enumerate(evidence):
+        body = wrap_lines(item, available)
+        if index == 0:
+            label = " " * FINDING_INDENT + "Found".ljust(LABEL_WIDTH)
+        else:
+            label = " " * column
+        lines.append(label + bullet + body[0])
+        for line in body[1:]:
+            lines.append(" " * (column + 2) + line)
+    if hidden > 0:
+        note = "... {} more evidence line{} not shown".format(
+            hidden, "" if hidden == 1 else "s"
+        )
+        lines.append(" " * column + bullet + note)
+
+
+def render_entry(lines, entry, number, width, marks, color):
+    count = entry.get("count", 1)
+    count_text = plural(count, "item")
+    prefix = "  {:>2}  ".format(str(number) + ".")
+    available = width - len(prefix) - len(count_text) - 2
+    title_lines = wrap_lines(entry["title"], available)
+    first = prefix + title_lines[0]
+    gap = width - len(first) - len(count_text)
+    lines.append(
+        first[: len(prefix)]
+        + bold(first[len(prefix):], color)
+        + " " * max(1, gap)
+        + dim(count_text, color)
+    )
+    for line in title_lines[1:]:
+        lines.append(" " * len(prefix) + line)
+
+    add_labelled(lines, "Why", entry["why"], width)
+    evidence = entry["evidence"]
+    if evidence:
+        hidden = entry.get("evidence_total", len(evidence)) - len(evidence)
+        add_evidence(lines, evidence, hidden, marks, width)
+    add_labelled(lines, "Fix", entry["fix"], width)
     lines.append("")
 
 
-def render_group(lines, group, color):
-    label = "[{}]".format(group["severity"].upper())
-    count = group["count"]
-    lines.append(
-        "{} {} ({} item{})".format(
-            colorize(label, group["severity"], color),
-            group["title"],
-            count,
-            "" if count == 1 else "s",
-        )
-    )
-    lines.append("  Why: " + group["why"])
-    if group["evidence"]:
-        lines.append("  Evidence:")
-        for evidence in group["evidence"]:
-            lines.append("    - " + evidence)
-        hidden = group["evidence_total"] - len(group["evidence"])
-        if hidden > 0:
-            lines.append(
-                "    ... {} more evidence line{} not shown".format(
-                    hidden, "" if hidden == 1 else "s"
-                )
+def bold(text, enabled):
+    return "\033[1m" + text + "\033[0m" if enabled else text
+
+
+def dim(text, enabled):
+    return "\033[2m" + text + "\033[0m" if enabled else text
+
+
+def render_summary(lines, counts, width, marks, color):
+    lines.append(rule_heading("Summary", width, marks))
+    largest = max([counts[name] for name in SEVERITIES] + [1])
+    for severity in SEVERITIES:
+        count = counts[severity]
+        filled = 0
+        if count:
+            filled = max(
+                1, int(round(count / largest * SUMMARY_BAR_WIDTH))
             )
-    lines.append("  Fix: " + group["fix"])
+        name = colorize(severity.upper().ljust(len("critical")), severity, color)
+        lines.append(
+            "  {} {:>4}  {}".format(name, count, marks["bar"] * filled)
+        )
     lines.append("")
 
 
 def render_text(data, color, show_all=False):
-    lines = [data["summary_line"]]
+    marks = glyphs()
+    width = output_width()
     scan = data["scan"]
-    lines.append(
-        "Files checked: {:,}. Permission errors skipped: {:,}. "
-        "Files over 1 MB skipped: {:,}.".format(
-            scan["files_scanned"],
-            scan["permission_errors"],
-            scan["files_over_1mb_skipped"],
-        )
-    )
-    if scan["stopped_early"]:
-        lines.append(
-            "Scan stopped early: {} reached; results may be incomplete.".format(
-                scan["stop_reason"]
-            )
-        )
-    for note in scan["notes"]:
-        lines.append("Note: " + note)
+    findings = data["findings"]
+    counts = data["summary"]
+    lines = []
+
+    lines.append(bold("leasecheck " + VERSION, color) + "  " + dim(TAGLINE, color))
+    lines.append(marks["rule"] * width)
     lines.append("")
 
-    if show_all:
-        for item in data["findings"]:
-            render_item(lines, item, color)
+    if findings:
+        top = min(
+            findings,
+            key=lambda item: (RANK[item["severity"]], item["title"].lower()),
+        )
+        tally = ", ".join(
+            "{} {}".format(counts[name], name) for name in SEVERITIES if counts[name]
+        )
+        lines.append(
+            "  Overall risk  "
+            + colorize(top["severity"].upper(), top["severity"], color)
+            + dim("   " + tally, color)
+        )
+        add_labelled(lines, "Start with", top["title"], width, indent=2, label_width=14)
     else:
-        for group in group_findings(data["findings"]):
-            render_group(lines, group, color)
+        lines.append("  Overall risk  none detected")
+        lines.append("  No known issues were found in this scan.")
+    lines.append("")
 
-    lines.append(DISCLAIMER)
+    render_summary(lines, counts, width, marks, color)
+
+    groups = group_findings(findings)
+    for severity in SEVERITIES:
+        if show_all:
+            entries = [f for f in findings if f["severity"] == severity]
+            detail = plural(len(entries), "item")
+        else:
+            entries = [g for g in groups if g["severity"] == severity]
+            detail = "{} finding{} / {} item{}".format(
+                len(entries),
+                "" if len(entries) == 1 else "s",
+                counts[severity],
+                "" if counts[severity] == 1 else "s",
+            )
+        if not entries:
+            continue
+        lines.append(
+            severity_heading(severity, detail, width, marks, color)
+        )
+        for number, entry in enumerate(entries, 1):
+            if show_all:
+                entry = dict(entry)
+                entry["count"] = 1
+                entry["evidence_total"] = len(entry["evidence"])
+            render_entry(lines, entry, number, width, marks, color)
+
+    lines.append(rule_heading("Scan details", width, marks))
+    facts = (
+        ("Files checked", "{:,}".format(scan["files_scanned"])),
+        ("Files skipped", "{:,}".format(scan["files_over_1mb_skipped"])),
+        ("Permission errors", "{:,}".format(scan["permission_errors"])),
+        ("Elapsed time", "{:.1f} s".format(scan["elapsed_seconds"])),
+    )
+    for label, value in facts:
+        lines.append("  " + label.ljust(20) + value)
+    if scan["stopped_early"]:
+        lines.append(
+            "  " + "Scan stopped".ljust(20)
+            + "early, {} reached".format(scan["stop_reason"])
+        )
+    if scan["notes"]:
+        lines.append("")
+        lines.append("  Scan notes:")
+        for note in scan["notes"]:
+            for index, line in enumerate(wrap_lines(note, width - 6)):
+                lines.append(("    - " if index == 0 else "      ") + line)
+
+    lines.append(marks["rule"] * width)
+    for line in wrap_lines(DISCLAIMER, width - 2):
+        lines.append("  " + dim(line, color))
     return "\n".join(lines)
+
+
+HTML_STYLE = """
+:root {
+  color-scheme: light dark;
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --text: #1b2027;
+  --muted: #5c6675;
+  --border: #d9dee6;
+  --code: #eef1f5;
+  --critical: #b42318;
+  --critical-bg: #fdeceb;
+  --high: #b54708;
+  --high-bg: #fdf3e7;
+  --medium: #8a6100;
+  --medium-bg: #fbf6e3;
+  --info: #0b6b6e;
+  --info-bg: #e9f8f8;
+  --none: #1f6f43;
+  --none-bg: #e9f5ee;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1319;
+    --panel: #171c24;
+    --text: #e7ebf0;
+    --muted: #9aa5b3;
+    --border: #2b323c;
+    --code: #222833;
+    --critical: #ff8f85;
+    --critical-bg: #2c1515;
+    --high: #ffab73;
+    --high-bg: #2a1c10;
+    --medium: #f2cf6b;
+    --medium-bg: #28220f;
+    --info: #7fdede;
+    --info-bg: #0f2526;
+    --none: #7fd6a2;
+    --none-bg: #0f2418;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+}
+code, .evidence li {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+.wrap {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2.5rem);
+}
+.page-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+h1 {
+  font-size: clamp(1.5rem, 4vw, 2.1rem);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+h1 .version {
+  font-size: 0.55em;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15em 0.6em;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
+.tagline { color: var(--muted); margin: 0.4rem 0 0; }
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.95rem;
+}
+.meta dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.meta dd { margin: 0; font-weight: 600; }
+.risk {
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--none);
+  background: var(--none-bg);
+  border-radius: 0.6rem;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.75rem;
+}
+.risk-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.risk-value {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--none);
+}
+.risk-action { margin: 0.55rem 0 0; }
+.risk-critical { border-left-color: var(--critical); background: var(--critical-bg); }
+.risk-critical .risk-value { color: var(--critical); }
+.risk-high { border-left-color: var(--high); background: var(--high-bg); }
+.risk-high .risk-value { color: var(--high); }
+.risk-medium { border-left-color: var(--medium); background: var(--medium-bg); }
+.risk-medium .risk-value { color: var(--medium); }
+.risk-info { border-left-color: var(--info); background: var(--info-bg); }
+.risk-info .risk-value { color: var(--info); }
+.section-title {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 2rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+.cards {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--info);
+  border-radius: 0.55rem;
+  padding: 0.8rem 0.9rem;
+}
+.card-critical { border-top-color: var(--critical); }
+.card-high { border-top-color: var(--high); }
+.card-medium { border-top-color: var(--medium); }
+.card-info { border-top-color: var(--info); }
+.card-sev {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.card-count {
+  display: block;
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.card-caption { display: block; font-size: 0.78rem; color: var(--muted); }
+.sev-section { margin-top: 1.75rem; }
+.sev-section > h3 {
+  font-size: 1.02rem;
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+.finding {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--info);
+  border-radius: 0.55rem;
+  margin: 0.6rem 0;
+}
+.finding.sev-critical { border-left-color: var(--critical); }
+.finding.sev-high { border-left-color: var(--high); }
+.finding.sev-medium { border-left-color: var(--medium); }
+.finding.sev-info { border-left-color: var(--info); }
+.finding > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.8rem 0.95rem;
+  cursor: pointer;
+  list-style: none;
+}
+.finding > summary::-webkit-details-marker { display: none; }
+.badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  background: var(--info-bg);
+  color: var(--info);
+  border: 1px solid currentColor;
+}
+.badge-critical { background: var(--critical-bg); color: var(--critical); }
+.badge-high { background: var(--high-bg); color: var(--high); }
+.badge-medium { background: var(--medium-bg); color: var(--medium); }
+.badge-info { background: var(--info-bg); color: var(--info); }
+.finding-title { font-weight: 600; flex: 1 1 12rem; overflow-wrap: anywhere; }
+.finding-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.finding-body {
+  padding: 0 0.95rem 1rem;
+  border-top: 1px solid var(--border);
+}
+.finding-body h4 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1rem 0 0.25rem;
+}
+.finding-body p { margin: 0; }
+.evidence { list-style: none; margin: 0; padding: 0; }
+.evidence li {
+  font-size: 0.86rem;
+  background: var(--code);
+  border-radius: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+}
+.evidence li.more { color: var(--muted); font-style: italic; }
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+.facts div {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+}
+.facts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.notes { margin: 0.5rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer {
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+@media (max-width: 34rem) {
+  .wrap { padding: 1rem 0.85rem 2rem; }
+  .finding > summary { padding: 0.7rem 0.75rem; }
+  .finding-body { padding: 0 0.75rem 0.9rem; }
+  .finding-count { margin-left: 0; width: 100%; }
+  .meta { gap: 0.3rem 1rem; }
+}
+@media print {
+  :root {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --text: #000000;
+    --muted: #333333;
+    --border: #999999;
+    --code: #f2f2f2;
+    --critical: #8f1d14;
+    --critical-bg: #ffffff;
+    --high: #7a3006;
+    --high-bg: #ffffff;
+    --medium: #5f4300;
+    --medium-bg: #ffffff;
+    --info: #075254;
+    --info-bg: #ffffff;
+    --none: #175c37;
+    --none-bg: #ffffff;
+  }
+  body { background: #ffffff; color: #000000; font-size: 11pt; }
+  .wrap { max-width: none; padding: 0; }
+  details { display: block; }
+  details:not([open])::details-content { content-visibility: visible; }
+  details > *:not(summary) { display: block; }
+  .finding, .card, .risk, .facts div {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .finding > summary { cursor: default; }
+}
+"""
+
+
+def render_html(data):
+    scan = data["scan"]
+    findings = data["findings"]
+    counts = data["summary"]
+    groups = group_findings(findings)
+    by_severity = {name: [] for name in SEVERITIES}
+    for group in groups:
+        by_severity[group["severity"]].append(group)
+    top = None
+    if findings:
+        top = min(
+            findings,
+            key=lambda item: (RANK[item["severity"]], item["title"].lower()),
+        )
+    scan_date = time.strftime("%Y-%m-%d")
+    scan_time = time.strftime("%H:%M:%S")
+
+    parts = []
+    parts.append("<!DOCTYPE html>")
+    parts.append('<html lang="en">')
+    parts.append("<head>")
+    parts.append('<meta charset="utf-8">')
+    parts.append(
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    )
+    parts.append(
+        '<meta http-equiv="Content-Security-Policy" '
+        'content="default-src \'none\'; style-src \'unsafe-inline\'; '
+        'img-src data:">'
+    )
+    parts.append('<meta name="color-scheme" content="light dark">')
+    parts.append(
+        "<title>leasecheck {} - security report</title>".format(
+            html.escape(VERSION, quote=True)
+        )
+    )
+    parts.append("<style>" + HTML_STYLE + "</style>")
+    parts.append("</head>")
+    parts.append("<body>")
+    parts.append('<div class="wrap">')
+
+    parts.append('<header class="page-header">')
+    parts.append(
+        '<h1>leasecheck <span class="version">{}</span></h1>'.format(
+            html.escape(VERSION, quote=True)
+        )
+    )
+    parts.append(
+        '<p class="tagline">{}</p>'.format(html.escape(TAGLINE, quote=True))
+    )
+    parts.append('<dl class="meta">')
+    parts.append(
+        "<div><dt>Scan date</dt><dd>{}</dd></div>".format(
+            html.escape(scan_date, quote=True)
+        )
+    )
+    parts.append(
+        "<div><dt>Scan time</dt><dd>{}</dd></div>".format(
+            html.escape(scan_time, quote=True)
+        )
+    )
+    parts.append(
+        '<div><dt>Home</dt><dd><code>{}</code></dd></div>'.format(
+            html.escape(scan["home"], quote=True)
+        )
+    )
+    parts.append("</dl>")
+    parts.append("</header>")
+
+    if top is None:
+        risk_class = "risk-none"
+        risk_value = "None detected"
+    else:
+        risk_class = "risk-" + top["severity"]
+        risk_value = SEVERITY_LABELS[top["severity"]]
+    parts.append(
+        '<section class="risk {}" role="status">'.format(
+            html.escape(risk_class, quote=True)
+        )
+    )
+    parts.append('<span class="risk-label">Overall risk</span>')
+    parts.append(
+        '<span class="risk-value">{}</span>'.format(
+            html.escape(risk_value, quote=True)
+        )
+    )
+    if top is None:
+        parts.append(
+            '<p class="risk-action">{}</p>'.format(
+                html.escape(
+                    "No known issues were found in this scan.", quote=True
+                )
+            )
+        )
+    else:
+        parts.append(
+            '<p class="risk-action">Start with: <strong>{}</strong></p>'
+            '<p class="risk-action">{}</p>'.format(
+                html.escape(top["title"], quote=True),
+                html.escape(top["fix"], quote=True),
+            )
+        )
+    parts.append("</section>")
+
+    parts.append('<h2 class="section-title">Summary</h2>')
+    parts.append('<ul class="cards">')
+    for severity in SEVERITIES:
+        item_count = counts[severity]
+        group_count = len(by_severity[severity])
+        if item_count:
+            caption = "{} in {}".format(
+                plural(item_count, "item"), plural(group_count, "finding")
+            )
+        else:
+            caption = "none"
+        parts.append(
+            '<li class="card card-{sev}">'
+            '<span class="card-sev">{label}</span>'
+            '<span class="card-count">{count}</span>'
+            '<span class="card-caption">{caption}</span>'
+            "</li>".format(
+                sev=html.escape(severity, quote=True),
+                label=html.escape(SEVERITY_LABELS[severity], quote=True),
+                count=item_count,
+                caption=html.escape(caption, quote=True),
+            )
+        )
+    parts.append("</ul>")
+
+    parts.append('<h2 class="section-title">Findings</h2>')
+    for severity in SEVERITIES:
+        severity_groups = by_severity[severity]
+        if not severity_groups:
+            continue
+        parts.append('<section class="sev-section">')
+        parts.append(
+            "<h3>{} - {}</h3>".format(
+                html.escape(SEVERITY_LABELS[severity], quote=True),
+                html.escape(plural(counts[severity], "item"), quote=True),
+            )
+        )
+        for group in severity_groups:
+            parts.append(
+                '<details class="finding sev-{}"{}>'.format(
+                    html.escape(severity, quote=True),
+                    " open" if severity in ("critical", "high") else "",
+                )
+            )
+            parts.append("<summary>")
+            parts.append(
+                '<span class="badge badge-{sev}">{label}</span>'.format(
+                    sev=html.escape(severity, quote=True),
+                    label=html.escape(
+                        SEVERITY_LABELS[severity], quote=True
+                    ),
+                )
+            )
+            parts.append(
+                '<span class="finding-title">{}</span>'.format(
+                    html.escape(group["title"], quote=True)
+                )
+            )
+            parts.append(
+                '<span class="finding-count">{}</span>'.format(
+                    html.escape(plural(group["count"], "item"), quote=True)
+                )
+            )
+            parts.append("</summary>")
+            parts.append('<div class="finding-body">')
+            parts.append("<h4>Why</h4>")
+            parts.append(
+                "<p>{}</p>".format(html.escape(group["why"], quote=True))
+            )
+            if group["evidence"]:
+                parts.append("<h4>Evidence</h4>")
+                parts.append('<ul class="evidence">')
+                for evidence in group["evidence"]:
+                    parts.append(
+                        "<li>{}</li>".format(
+                            html.escape(evidence, quote=True)
+                        )
+                    )
+                hidden = group["evidence_total"] - len(group["evidence"])
+                if hidden > 0:
+                    more = "... {} more evidence line{} not shown".format(
+                        hidden, "" if hidden == 1 else "s"
+                    )
+                    parts.append(
+                        '<li class="more">{}</li>'.format(
+                            html.escape(more, quote=True)
+                        )
+                    )
+                parts.append("</ul>")
+            parts.append("<h4>Fix</h4>")
+            parts.append(
+                "<p>{}</p>".format(html.escape(group["fix"], quote=True))
+            )
+            parts.append("</div>")
+            parts.append("</details>")
+        parts.append("</section>")
+
+    parts.append('<section class="scan">')
+    parts.append('<h2 class="section-title">Scan details</h2>')
+    facts = [
+        ("Home", scan["home"]),
+        ("Files checked", "{:,}".format(scan["files_scanned"])),
+        ("Files skipped", "{:,}".format(scan["files_over_1mb_skipped"])),
+        ("Permission errors", "{:,}".format(scan["permission_errors"])),
+        ("Elapsed time", "{:.1f} seconds".format(scan["elapsed_seconds"])),
+    ]
+    if scan["stopped_early"]:
+        facts.append(
+            ("Scan stopped", "early, {} reached".format(scan["stop_reason"]))
+        )
+    parts.append('<dl class="facts">')
+    for label, value in facts:
+        parts.append(
+            "<div><dt>{}</dt><dd>{}</dd></div>".format(
+                html.escape(label, quote=True),
+                html.escape(str(value), quote=True),
+            )
+        )
+    parts.append("</dl>")
+    if scan["notes"]:
+        parts.append("<h3>Scan notes</h3>")
+        parts.append('<ul class="notes">')
+        for note in scan["notes"]:
+            parts.append(
+                "<li>{}</li>".format(html.escape(note, quote=True))
+            )
+        parts.append("</ul>")
+    parts.append("</section>")
+
+    parts.append("<footer>")
+    parts.append(
+        "<p>{}</p>".format(html.escape(DISCLAIMER, quote=True))
+    )
+    parts.append("</footer>")
+    parts.append("</div>")
+    parts.append("</body>")
+    parts.append("</html>")
+    return "\n".join(parts)
 
 
 def render_json(data):
@@ -1807,6 +2531,11 @@ def main(argv=None):
         action="store_true",
         help="print SARIF 2.1.0 JSON instead of text",
     )
+    output.add_argument(
+        "--html",
+        action="store_true",
+        help="print a self-contained HTML report instead of text",
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -1849,6 +2578,7 @@ def main(argv=None):
     color = (
         not args.json
         and not args.sarif
+        and not args.html
         and sys.stdout.isatty()
         and os.environ.get("NO_COLOR") is None
         and os.environ.get("TERM") != "dumb"
@@ -1857,6 +2587,8 @@ def main(argv=None):
         sys.stdout.write(render_sarif(data, home) + "\n")
     elif args.json:
         sys.stdout.write(render_json(data) + "\n")
+    elif args.html:
+        sys.stdout.write(render_html(data) + "\n")
     else:
         sys.stdout.write(render_text(data, color, args.all) + "\n")
 

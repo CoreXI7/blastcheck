@@ -4,6 +4,8 @@ Shows what an AI coding agent running as the current user could reach on this co
 
 It checks your home directory, a few well-known locations and your shell environment, reports common ways an agent could gain more access than you intended, and gives a one-line fix for each finding. It is read-only.
 
+See a [sample report](https://corexi7.github.io/leasecheck/) made from made-up data.
+
 ## Quick start
 
 ```sh

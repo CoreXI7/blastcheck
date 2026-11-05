@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="color-scheme" content="light dark">
+<title>leasecheck sample report</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --text: #1b2027;
+  --muted: #5c6675;
+  --border: #d9dee6;
+  --code: #eef1f5;
+  --critical: #b42318;
+  --critical-bg: #fdeceb;
+  --high: #b54708;
+  --high-bg: #fdf3e7;
+  --medium: #8a6100;
+  --medium-bg: #fbf6e3;
+  --info: #0b6b6e;
+  --info-bg: #e9f8f8;
+  --none: #1f6f43;
+  --none-bg: #e9f5ee;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1319;
+    --panel: #171c24;
+    --text: #e7ebf0;
+    --muted: #9aa5b3;
+    --border: #2b323c;
+    --code: #222833;
+    --critical: #ff8f85;
+    --critical-bg: #2c1515;
+    --high: #ffab73;
+    --high-bg: #2a1c10;
+    --medium: #f2cf6b;
+    --medium-bg: #28220f;
+    --info: #7fdede;
+    --info-bg: #0f2526;
+    --none: #7fd6a2;
+    --none-bg: #0f2418;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+}
+code, .evidence li {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+.wrap {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2.5rem);
+}
+.page-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+h1 {
+  font-size: clamp(1.5rem, 4vw, 2.1rem);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+h1 .version {
+  font-size: 0.55em;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15em 0.6em;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
+.tagline { color: var(--muted); margin: 0.4rem 0 0; }
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.95rem;
+}
+.meta dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.meta dd { margin: 0; font-weight: 600; }
+.risk {
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--none);
+  background: var(--none-bg);
+  border-radius: 0.6rem;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.75rem;
+}
+.risk-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.risk-value {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--none);
+}
+.risk-action { margin: 0.55rem 0 0; }
+.risk-critical { border-left-color: var(--critical); background: var(--critical-bg); }
+.risk-critical .risk-value { color: var(--critical); }
+.risk-high { border-left-color: var(--high); background: var(--high-bg); }
+.risk-high .risk-value { color: var(--high); }
+.risk-medium { border-left-color: var(--medium); background: var(--medium-bg); }
+.risk-medium .risk-value { color: var(--medium); }
+.risk-info { border-left-color: var(--info); background: var(--info-bg); }
+.risk-info .risk-value { color: var(--info); }
+.section-title {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 2rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+.cards {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--info);
+  border-radius: 0.55rem;
+  padding: 0.8rem 0.9rem;
+}
+.card-critical { border-top-color: var(--critical); }
+.card-high { border-top-color: var(--high); }
+.card-medium { border-top-color: var(--medium); }
+.card-info { border-top-color: var(--info); }
+.card-sev {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.card-count {
+  display: block;
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.card-caption { display: block; font-size: 0.78rem; color: var(--muted); }
+.sev-section { margin-top: 1.75rem; }
+.sev-section > h3 {
+  font-size: 1.02rem;
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+.finding {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--info);
+  border-radius: 0.55rem;
+  margin: 0.6rem 0;
+}
+.finding.sev-critical { border-left-color: var(--critical); }
+.finding.sev-high { border-left-color: var(--high); }
+.finding.sev-medium { border-left-color: var(--medium); }
+.finding.sev-info { border-left-color: var(--info); }
+.finding > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.8rem 0.95rem;
+  cursor: pointer;
+  list-style: none;
+}
+.finding > summary::-webkit-details-marker { display: none; }
+.badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  background: var(--info-bg);
+  color: var(--info);
+  border: 1px solid currentColor;
+}
+.badge-critical { background: var(--critical-bg); color: var(--critical); }
+.badge-high { background: var(--high-bg); color: var(--high); }
+.badge-medium { background: var(--medium-bg); color: var(--medium); }
+.badge-info { background: var(--info-bg); color: var(--info); }
+.finding-title { font-weight: 600; flex: 1 1 12rem; overflow-wrap: anywhere; }
+.finding-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.finding-body {
+  padding: 0 0.95rem 1rem;
+  border-top: 1px solid var(--border);
+}
+.finding-body h4 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1rem 0 0.25rem;
+}
+.finding-body p { margin: 0; }
+.evidence { list-style: none; margin: 0; padding: 0; }
+.evidence li {
+  font-size: 0.86rem;
+  background: var(--code);
+  border-radius: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+}
+.evidence li.more { color: var(--muted); font-style: italic; }
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+.facts div {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+}
+.facts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.notes { margin: 0.5rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer {
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+@media (max-width: 34rem) {
+  .wrap { padding: 1rem 0.85rem 2rem; }
+  .finding > summary { padding: 0.7rem 0.75rem; }
+  .finding-body { padding: 0 0.75rem 0.9rem; }
+  .finding-count { margin-left: 0; width: 100%; }
+  .meta { gap: 0.3rem 1rem; }
+}
+@media print {
+  :root {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --text: #000000;
+    --muted: #333333;
+    --border: #999999;
+    --code: #f2f2f2;
+    --critical: #8f1d14;
+    --critical-bg: #ffffff;
+    --high: #7a3006;
+    --high-bg: #ffffff;
+    --medium: #5f4300;
+    --medium-bg: #ffffff;
+    --info: #075254;
+    --info-bg: #ffffff;
+    --none: #175c37;
+    --none-bg: #ffffff;
+  }
+  body { background: #ffffff; color: #000000; font-size: 11pt; }
+  .wrap { max-width: none; padding: 0; }
+  details { display: block; }
+  details:not([open])::details-content { content-visibility: visible; }
+  details > *:not(summary) { display: block; }
+  .finding, .card, .risk, .facts div {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .finding > summary { cursor: default; }
+}
+</style>
+</head>
+<body><div style="background:#1f2937;color:#f9fafb;padding:10px 16px;text-align:center;font:14px/1.5 system-ui,sans-serif">Sample report made from a test home folder with made-up data. <a style="color:#93c5fd" href="https://github.com/CoreXI7/leasecheck">Get leasecheck on GitHub</a></div>
+<div class="wrap">
+<header class="page-header">
+<h1>leasecheck <span class="version">0.2.0</span></h1>
+<p class="tagline">Show what an AI coding agent running as you could reach.</p>
+<dl class="meta">
+<div><dt>Scan date</dt><dd>2026-11-05</dd></div>
+<div><dt>Scan time</dt><dd>14:31:06</dd></div>
+<div><dt>Home</dt><dd><code>~</code></dd></div>
+</dl>
+</header>
+<section class="risk risk-critical" role="status">
+<span class="risk-label">Overall risk</span>
+<span class="risk-value">Critical</span>
+<p class="risk-action">Start with: <strong>Passwordless sudo gives full root</strong></p><p class="risk-action">Remove the NOPASSWD rule and require a password, or scope it to a few read-only commands.</p>
+</section>
+<h2 class="section-title">Summary</h2>
+<ul class="cards">
+<li class="card card-critical"><span class="card-sev">Critical</span><span class="card-count">3</span><span class="card-caption">3 items in 3 findings</span></li>
+<li class="card card-high"><span class="card-sev">High</span><span class="card-count">8</span><span class="card-caption">8 items in 5 findings</span></li>
+<li class="card card-medium"><span class="card-sev">Medium</span><span class="card-count">4</span><span class="card-caption">4 items in 2 findings</span></li>
+<li class="card card-info"><span class="card-sev">Info</span><span class="card-count">2</span><span class="card-caption">2 items in 2 findings</span></li>
+</ul>
+<h2 class="section-title">Findings</h2>
+<section class="sev-section">
+<h3>Critical - 3 items</h3>
+<details class="finding sev-critical" open>
+<summary>
+<span class="badge badge-critical">Critical</span>
+<span class="finding-title">Passwordless sudo gives full root</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>An agent could run any command as root without a password, directly or through a program that can start other programs.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>programs: /usr/bin/systemctl</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove the NOPASSWD rule and require a password, or scope it to a few read-only commands.</p>
+</div>
+</details>
+<details class="finding sev-critical" open>
+<summary>
+<span class="badge badge-critical">Critical</span>
+<span class="finding-title">The Docker socket is writable</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>Control of the Docker daemon is equivalent to root on the host.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>/var/run/docker.sock (mode 0660)</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove the agent&#x27;s access to the Docker socket or put a restricted proxy in front of it.</p>
+</div>
+</details>
+<details class="finding sev-critical" open>
+<summary>
+<span class="badge badge-critical">Critical</span>
+<span class="finding-title">Your user is in a root-equivalent group</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>Membership in these groups lets a process act as root on this computer.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>groups: docker</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove the agent&#x27;s user from these groups and give it a narrow, dedicated path instead.</p>
+</div>
+</details>
+</section>
+<section class="sev-section">
+<h3>High - 8 items</h3>
+<details class="finding sev-high" open>
+<summary>
+<span class="badge badge-high">High</span>
+<span class="finding-title">Claude Code may run commands without asking</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>An allow rule lets the agent run broad shell commands without asking you.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/.claude/settings.json (allow rules: Bash(*))</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove broad Bash allow rules or narrow them to the specific commands the agent needs.</p>
+</div>
+</details>
+<details class="finding sev-high" open>
+<summary>
+<span class="badge badge-high">High</span>
+<span class="finding-title">Private SSH key without a passphrase</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>An agent running as you can read the key and use it to log in to the machines it is authorized for.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/.ssh/id_ed25519 (OPENSSH PRIVATE KEY; no passphrase detected)</li>
+<li>known_hosts has 3 entries (machines these keys may reach)</li>
+</ul>
+<h4>Fix</h4>
+<p>Add a passphrase (ssh-keygen -p -f &lt;key&gt;) or replace the key with a short-lived one.</p>
+</div>
+</details>
+<details class="finding sev-high" open>
+<summary>
+<span class="badge badge-high">High</span>
+<span class="finding-title">Saved login store present: AWS credentials</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>An agent could read these saved logins and act as you.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/.aws/credentials (file, mode 0600)</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove credentials you no longer use, keep permissions at 600, and prefer short-lived tokens.</p>
+</div>
+</details>
+<details class="finding sev-high" open>
+<summary>
+<span class="badge badge-high">High</span>
+<span class="finding-title">Saved login store present: GitHub CLI login</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>An agent could read these saved logins and act as you.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/.config/gh/hosts.yml (file, mode 0664)</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove credentials you no longer use, keep permissions at 600, and prefer short-lived tokens.</p>
+</div>
+</details>
+<details class="finding sev-high" open>
+<summary>
+<span class="badge badge-high">High</span>
+<span class="finding-title">Secret file readable by group or others</span>
+<span class="finding-count">4 items</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>Other local users or processes can read this file.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/.config/gh/hosts.yml (mode 0664)</li>
+<li>~/proj/api/.env.3 (mode 0644)</li>
+<li>~/proj/api/.env.2 (mode 0644)</li>
+<li>~/proj/api/.env.1 (mode 0644)</li>
+</ul>
+<h4>Fix</h4>
+<p>Restrict this file to its owner (chmod 600).</p>
+</div>
+</details>
+</section>
+<section class="sev-section">
+<h3>Medium - 4 items</h3>
+<details class="finding sev-medium">
+<summary>
+<span class="badge badge-medium">Medium</span>
+<span class="finding-title">Credentials in your shell environment</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>Any agent you start inherits these variables and can read the credentials.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>environment variables: OPENAI_API_KEY</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove long-lived credentials from your shell environment; use a credential helper or short-lived tokens instead.</p>
+</div>
+</details>
+<details class="finding sev-medium">
+<summary>
+<span class="badge badge-medium">Medium</span>
+<span class="finding-title">Secret-looking file in the home directory</span>
+<span class="finding-count">3 items</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>Its contents look like credentials an agent could copy or use.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/proj/api/.env.3 (2 lines): DB_PASSWORD, STRIPE_SECRET_KEY</li>
+<li>~/proj/api/.env.2 (2 lines): DB_PASSWORD, STRIPE_SECRET_KEY</li>
+<li>~/proj/api/.env.1 (2 lines): DB_PASSWORD, STRIPE_SECRET_KEY</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove it if unused; otherwise keep it outside the home and prefer short-lived credentials.</p>
+</div>
+</details>
+</section>
+<section class="sev-section">
+<h3>Info - 2 items</h3>
+<details class="finding sev-info">
+<summary>
+<span class="badge badge-info">Info</span>
+<span class="finding-title">Agent installed: Claude Code</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>A local coding agent can run with your user permissions.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>~/.claude</li>
+</ul>
+<h4>Fix</h4>
+<p>Review its permission mode and avoid bypass/dangerous flags.</p>
+</div>
+</details>
+<details class="finding sev-info">
+<summary>
+<span class="badge badge-info">Info</span>
+<span class="finding-title">SSH access an agent could use</span>
+<span class="finding-count">1 item</span>
+</summary>
+<div class="finding-body">
+<h4>Why</h4>
+<p>Each host in your SSH setup is somewhere an agent could connect using your keys.</p>
+<h4>Evidence</h4>
+<ul class="evidence">
+<li>1 private key(s) in ~/.ssh; 0 show an encrypted header</li>
+<li>SSH config has 2 Host entries: web-prod, db-backup</li>
+<li>known_hosts has 3 entries (machines these keys may reach)</li>
+</ul>
+<h4>Fix</h4>
+<p>Remove unused keys and hosts, and give agents a dedicated key with limited reach.</p>
+</div>
+</details>
+</section>
+<section class="scan">
+<h2 class="section-title">Scan details</h2>
+<dl class="facts">
+<div><dt>Home</dt><dd>~</dd></div>
+<div><dt>Files checked</dt><dd>4</dd></div>
+<div><dt>Files skipped</dt><dd>0</dd></div>
+<div><dt>Permission errors</dt><dd>0</dd></div>
+<div><dt>Elapsed time</dt><dd>0.0 seconds</dd></div>
+</dl>
+</section>
+<footer>
+<p>This shows common risks it knows to look for. It doesn&#x27;t prove you&#x27;re safe. Nothing left this computer.</p>
+</footer>
+</div>
+</body>
+</html>
